@@ -29,6 +29,8 @@ var (
 	VERSION = "SELFBUILD"
 	// SALT is use for pbkdf2 key expansion
 	SALT = "kcp-go"
+	// default http host
+	DEFAULTHOST = "www.bing.com"
 )
 
 type compStream struct {
@@ -363,6 +365,9 @@ func main() {
 		if config.NoHTTP {
 			log.Println("nohttp: true")
 		} else {
+			if len(config.Host) == 0 {
+				config.Host = DEFAULTHOST
+			}
 			log.Println("httphost: ", config.Host)
 		}
 
