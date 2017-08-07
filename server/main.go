@@ -243,10 +243,6 @@ func main() {
 			Name:  "nohttp",
 			Usage: "don't send http request after tcp 3-way handshake",
 		},
-		cli.BoolFlag{
-			Name:  "ignrst",
-			Usage: "ignore tcp rst packet(set it with caution)",
-		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -273,7 +269,6 @@ func main() {
 		config.SnmpLog = c.String("snmplog")
 		config.SnmpPeriod = c.Int("snmpperiod")
 		config.NoHTTP = c.Bool("nohttp")
-		config.IgnRST = c.Bool("ignrst")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -291,7 +286,7 @@ func main() {
 
 		kcpraw.SetNoHTTP(config.NoHTTP)
 		kcpraw.SetDSCP(config.DSCP)
-		kcpraw.SetIgnRST(config.IgnRST)
+		kcpraw.SetIgnRST(true)
 
 		switch config.Mode {
 		case "normal":

@@ -238,10 +238,6 @@ func main() {
 			Name:  "nohttp",
 			Usage: "don't send http request after tcp 3-way handshake",
 		},
-		cli.BoolFlag{
-			Name:  "ignrst",
-			Usage: "ignore tcp rst packet(set it with caution)",
-		},
 		cli.IntFlag{
 			Name:  "scavengettl",
 			Value: 600,
@@ -276,7 +272,6 @@ func main() {
 		config.SnmpPeriod = c.Int("snmpperiod")
 		config.NoHTTP = c.Bool("nohttp")
 		config.Host = c.String("host")
-		config.IgnRST = c.Bool("ignrst")
 		config.ScavengeTTL = c.Int("scavengettl")
 
 		if c.String("c") != "" {
@@ -287,7 +282,7 @@ func main() {
 		kcpraw.SetNoHTTP(config.NoHTTP)
 		kcpraw.SetHost(config.Host)
 		kcpraw.SetDSCP(config.DSCP)
-		kcpraw.SetIgnRST(config.IgnRST)
+		kcpraw.SetIgnRST(true)
 
 		// log redirect
 		if config.Log != "" {
