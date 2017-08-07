@@ -1,12 +1,12 @@
 kcpraw
-______
+------
 
 运行在伪造的 TCP 协议之上的 kcptun, 主要目的是避免 ISP 对 UDP 协议可能的 QOS.  
 在三次握手后会进行 HTTP 握手, 将流量伪装成 HTTP 流量.  
 kcptun 的具体参数与使用方法参见 [kcptun](https://github.com/xtaci/kcptun)  
 
 Basic Usage 
-___________  
+-----------
 
 为了使用原始套接字/使用 pcap 发送数据，服务端与客户端都需要 root 权限。  
 在填写服务端监听地址时必须填写服务器的 ip 地址，省略 ip 地址是不行滴。
@@ -21,7 +21,7 @@ ___________
 ```
 
 Additional Parameters
-_____________________
+---------------------
 
 * host 
 设置启用 HTTP 伪装时所使用的 Host，如果不设置默认为 www.bing.com  
@@ -30,7 +30,7 @@ _____________________
 关闭 HTTP 伪装功能，在这一选项上客户端与服务端必须保持一致  
 
 Install & Build 
-_______________
+---------------
 
 对于普通用户，直接下载 [releases](https://github.com/ccsexyz/kcpraw/releases) 中对应的预编译版本即可。windows 下依赖 [winpcap](http://www.winpcap.org/install/),需要手动安装。
   
@@ -44,7 +44,7 @@ windows 下编译依赖 [winpcap](http://www.winpcap.org/install/) 和 gcc 请�
 对 windows10 使用者你可能需要参考这个链接 [stackoverflow](http://stackoverflow.com/questions/38047858/compile-gopacket-on-windows-64bit)　　
 
 About RST
-_________  
+---------  
 
 现在默认开启 ignrst 选项在应用层忽略掉 rst 报文。但是过滤 rst 报文仍然是有意义的，不会产生大量的 rst 报文。
 
