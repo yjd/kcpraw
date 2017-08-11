@@ -363,7 +363,16 @@ func main() {
 				conn.SetStreamMode(true)
 				conn.SetWriteDelay(true)
 				conn.SetNoDelay(config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
-				conn.SetMtu(config.MTU)
+				var mss int
+				rawlis := kcpraw.GetListenerByAddr(lis.Addr())
+				if rawlis != nil {
+					mss = rawlis.GetMSSByAddr(conn.RemoteAddr())
+				}
+				if mss > 0 && mss < config.MTU {
+					conn.SetMtu(mss)
+				} else {
+					conn.SetMtu(config.MTU)
+				}
 				conn.SetWindowSize(config.SndWnd, config.RcvWnd)
 				conn.SetACKNoDelay(config.AckNodelay)
 

@@ -379,7 +379,14 @@ func main() {
 			kcpconn.SetWriteDelay(true)
 			kcpconn.SetNoDelay(config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
 			kcpconn.SetWindowSize(config.SndWnd, config.RcvWnd)
-			kcpconn.SetMtu(config.MTU)
+
+			mss := kcpraw.GetMSSByAddr(kcpconn.LocalAddr(), kcpconn.RemoteAddr())
+			if mss > 0 && mss < config.MTU {
+				kcpconn.SetMtu(mss)
+			} else {
+				kcpconn.SetMtu(config.MTU)
+			}
+
 			kcpconn.SetACKNoDelay(config.AckNodelay)
 
 			// stream multiplex
