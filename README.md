@@ -27,7 +27,7 @@ Additional Parameters
 设置启用 HTTP 伪装时所使用的 Host，如果不设置默认为 www.bing.com  
 
 * nohttp  
-关闭 HTTP 伪装功能，在这一选项上客户端与服务端必须保持一致  
+关闭 HTTP 伪装功能，~~在这一选项上客户端与服务端必须保持一致~~,现在服务端能够同时处理开启和关闭 HTTP 伪装的情况,服务端 nohttp 参数已经被废弃   
 
 Install & Build 
 ---------------

@@ -95,10 +95,7 @@ func checkError(err error) {
 
 func main() {
 	rand.Seed(int64(time.Now().Nanosecond()))
-	if VERSION == "SELFBUILD" {
-		// add more log flags for debugging
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-	}
+	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.Lmicroseconds)
 	myApp := cli.NewApp()
 	myApp.Name = "kcpraw"
 	myApp.Usage = "client(with SMUX)"
@@ -279,11 +276,6 @@ func main() {
 			checkError(err)
 		}
 
-		kcpraw.SetNoHTTP(config.NoHTTP)
-		kcpraw.SetHost(config.Host)
-		kcpraw.SetDSCP(config.DSCP)
-		kcpraw.SetIgnRST(true)
-
 		// log redirect
 		if config.Log != "" {
 			f, err := os.OpenFile(config.Log, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
@@ -365,6 +357,11 @@ func main() {
 			}
 			log.Println("httphost: ", config.Host)
 		}
+
+		kcpraw.SetNoHTTP(config.NoHTTP)
+		kcpraw.SetHost(config.Host)
+		kcpraw.SetDSCP(config.DSCP)
+		kcpraw.SetIgnRST(true)
 
 		smuxConfig := smux.DefaultConfig()
 		smuxConfig.MaxReceiveBuffer = config.SockBuf

@@ -115,10 +115,7 @@ func checkError(err error) {
 
 func main() {
 	rand.Seed(int64(time.Now().Nanosecond()))
-	if VERSION == "SELFBUILD" {
-		// add more log flags for debugging
-		log.SetFlags(log.LstdFlags | log.Lshortfile)
-	}
+	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.Lmicroseconds)
 	myApp := cli.NewApp()
 	myApp.Name = "kcpraw"
 	myApp.Usage = "server(with SMUX)"
@@ -239,10 +236,6 @@ func main() {
 			Value: "", // when the value is not empty, the config path must exists
 			Usage: "config from json file, which will override the command from shell",
 		},
-		cli.BoolFlag{
-			Name:  "nohttp",
-			Usage: "don't send http request after tcp 3-way handshake",
-		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -268,7 +261,6 @@ func main() {
 		config.Log = c.String("log")
 		config.SnmpLog = c.String("snmplog")
 		config.SnmpPeriod = c.Int("snmpperiod")
-		config.NoHTTP = c.Bool("nohttp")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -284,7 +276,8 @@ func main() {
 			log.SetOutput(f)
 		}
 
-		kcpraw.SetNoHTTP(config.NoHTTP)
+		kcpraw.SetNoHTTP(false)
+		kcpraw.SetMixed(true)
 		kcpraw.SetDSCP(config.DSCP)
 		kcpraw.SetIgnRST(true)
 
@@ -346,7 +339,6 @@ func main() {
 		log.Println("keepalive:", config.KeepAlive)
 		log.Println("snmplog:", config.SnmpLog)
 		log.Println("snmpperiod:", config.SnmpPeriod)
-		log.Println("nohttp:", config.NoHTTP)
 
 		sigch := make(chan os.Signal, 2)
 		signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
