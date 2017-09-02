@@ -8,8 +8,11 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"time"
+
+	_ "net/http/pprof"
 
 	"golang.org/x/crypto/pbkdf2"
 
@@ -240,6 +243,19 @@ func main() {
 			Value: 600,
 			Usage: "set how long an expired connection can live(in sec), -1 to disable",
 		},
+		cli.IntFlag{
+			Name:  "mulconn",
+			Value: 0,
+			Usage: "use multiple underlying conns for one kcp connection, default is 0",
+		},
+		cli.BoolFlag{
+			Name:  "udp",
+			Usage: "enable udp mode",
+		},
+		cli.StringFlag{
+			Name:  "pprof",
+			Usage: "set the listen address for pprof",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -270,6 +286,9 @@ func main() {
 		config.NoHTTP = c.Bool("nohttp")
 		config.Host = c.String("host")
 		config.ScavengeTTL = c.Int("scavengettl")
+		config.MulConn = c.Int("mulconn")
+		config.UDP = c.Bool("udp")
+		config.Pprof = c.String("pprof")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -348,6 +367,15 @@ func main() {
 		log.Println("snmplog:", config.SnmpLog)
 		log.Println("snmpperiod:", config.SnmpPeriod)
 		log.Println("scavengettl:", config.ScavengeTTL)
+		log.Println("mulconn:", config.MulConn)
+		log.Println("udp mode:", config.UDP)
+		log.Println("pprof listen at:", config.Pprof)
+
+		if len(config.Pprof) != 0 {
+			go func() {
+				log.Println(http.ListenAndServe(config.Pprof, nil))
+			}()
+		}
 
 		if config.NoHTTP {
 			log.Println("nohttp: true")
@@ -368,7 +396,7 @@ func main() {
 		smuxConfig.KeepAliveInterval = time.Duration(config.KeepAlive) * time.Second
 
 		createConn := func() (*smux.Session, error) {
-			kcpconn, err := kcpraw.DialWithOptions(config.RemoteAddr, block, config.DataShard, config.ParityShard)
+			kcpconn, err := kcpraw.DialWithOptions(config.RemoteAddr, block, config.DataShard, config.ParityShard, config.Key, config.MulConn, config.UDP)
 			if err != nil {
 				return nil, errors.Wrap(err, "createConn()")
 			}

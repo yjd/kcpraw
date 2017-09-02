@@ -29,6 +29,16 @@ Additional Parameters
 * nohttp  
 关闭 HTTP 伪装功能，~~在这一选项上客户端与服务端必须保持一致~~,现在服务端能够同时处理开启和关闭 HTTP 伪装的情况,服务端 nohttp 参数已经被废弃   
 
+* usemul (server only)
+使用 Mul 模式，当启用时能够将多个下层的数据流聚合为一个数据流，同时一条下层的数据流断开时不会影响到上层的连接  
+
+* mulconn (client only)
+当 mulconn 大于 0 时表示启用 Mul 模式，数值决定了发起多少个下层的连接，目前下层的连接可以是 UDP 或者 fake-TCP 连接   
+客户端与服务端在是否启用 Mul 模式这一点上必须保持一致  
+
+* udp  
+使用 UDP 套接字收发数据  
+
 Install & Build 
 ---------------
 
@@ -46,7 +56,7 @@ windows 下编译依赖 [winpcap](http://www.winpcap.org/install/) 和 gcc 请�
 About RST
 ---------  
 
-现在默认开启 ignrst 选项在应用层忽略掉 rst 报文。但是过滤 rst 报文仍然是有意义的，不会产生大量的 rst 报文。
+现在默认开启 ignrst 选项在应用层忽略掉 rst 报文。但是过滤 rst 报文仍然是有意义的，一小部分 ISP 可能会在收到 rst 报文后取消 NAT 映射。
 
 1.Linux: 由程序自动增删 iptables 规则  
 

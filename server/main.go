@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"time"
 
@@ -182,6 +183,10 @@ func main() {
 			Usage: "disable compression",
 		},
 		cli.BoolFlag{
+			Name:  "usemul",
+			Usage: "use multiple underlying conns for one kcp connection",
+		},
+		cli.BoolFlag{
 			Name:   "acknodelay",
 			Usage:  "flush ack immediately when a packet is received",
 			Hidden: true,
@@ -236,6 +241,14 @@ func main() {
 			Value: "", // when the value is not empty, the config path must exists
 			Usage: "config from json file, which will override the command from shell",
 		},
+		cli.BoolFlag{
+			Name:  "udp",
+			Usage: "enable udp mode",
+		},
+		cli.StringFlag{
+			Name:  "pprof",
+			Usage: "set the listen address for pprof",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -261,6 +274,9 @@ func main() {
 		config.Log = c.String("log")
 		config.SnmpLog = c.String("snmplog")
 		config.SnmpPeriod = c.Int("snmpperiod")
+		config.UseMul = c.Bool("usemul")
+		config.UDP = c.Bool("udp")
+		config.Pprof = c.String("pprof")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -323,7 +339,7 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		lis, err := kcpraw.ListenWithOptions(config.Listen, block, config.DataShard, config.ParityShard)
+		lis, err := kcpraw.ListenWithOptions(config.Listen, block, config.DataShard, config.ParityShard, config.Key, config.UseMul, config.UDP)
 		checkError(err)
 		log.Println("listening on:", lis.Addr())
 		log.Println("target:", config.Target)
@@ -339,6 +355,15 @@ func main() {
 		log.Println("keepalive:", config.KeepAlive)
 		log.Println("snmplog:", config.SnmpLog)
 		log.Println("snmpperiod:", config.SnmpPeriod)
+		log.Println("usemul:", config.UseMul)
+		log.Println("udp mode:", config.UDP)
+		log.Println("pprof listen at:", config.Pprof)
+
+		if len(config.Pprof) != 0 {
+			go func() {
+				log.Println(http.ListenAndServe(config.Pprof, nil))
+			}()
+		}
 
 		sigch := make(chan os.Signal, 2)
 		signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)

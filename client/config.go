@@ -34,6 +34,9 @@ type Config struct {
 	NoHTTP       bool   `json:"nohttp"`
 	Host         string `json:"host"`
 	ScavengeTTL  int    `json:"scavengettl"`
+	MulConn      int    `json:"mulconn"`
+	UDP          bool   `json:"udp"`
+	Pprof        string `json:"pprof"`
 }
 
 func parseJSONConfig(config *Config, path string) error {
