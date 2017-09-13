@@ -39,6 +39,9 @@ Additional Parameters
 * udp  
 使用 UDP 套接字收发数据  
 
+* proxy (server only)  
+在 服务端集成 socks4/socks4a/socks5/http 代理服务器
+
 Install & Build 
 ---------------
 

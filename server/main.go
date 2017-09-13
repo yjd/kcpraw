@@ -22,6 +22,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
+	ss "github.com/ccsexyz/shadowsocks-go/shadowsocks"
 )
 
 var (
@@ -77,13 +78,29 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 			log.Println(err)
 			return
 		}
-		p2, err := net.DialTimeout("tcp", config.Target, 5*time.Second)
-		if err != nil {
-			p1.Close()
-			log.Println(err)
-			continue
-		}
-		go handleClient(p1, p2)
+		go func(conn1 net.Conn) {
+			target := config.Target 
+			if config.DefaultProxy {
+				conn1 = ss.SocksAcceptor(conn1)
+				if conn1 == nil {
+					return 
+				}
+				dst, err := ss.GetDstConn(conn1)
+				if err != nil {
+					conn1.Close()
+					log.Println(err)
+					return 
+				}
+				target = dst.GetDst()
+			} 			
+			conn2, err := net.DialTimeout("tcp", target, 5*time.Second)
+			if err != nil {
+				conn1.Close()
+				log.Println(err)
+				return 
+			}
+			go handleClient(conn1, conn2)
+		}(p1)
 	}
 }
 
@@ -249,6 +266,10 @@ func main() {
 			Name:  "pprof",
 			Usage: "set the listen address for pprof",
 		},
+		cli.BoolFlag{
+			Name: "proxy",
+			Usage: "enable default proxy(socks4/socks4a/socks5/http)",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -277,6 +298,7 @@ func main() {
 		config.UseMul = c.Bool("usemul")
 		config.UDP = c.Bool("udp")
 		config.Pprof = c.String("pprof")
+		config.DefaultProxy = c.Bool("proxy")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -358,6 +380,7 @@ func main() {
 		log.Println("usemul:", config.UseMul)
 		log.Println("udp mode:", config.UDP)
 		log.Println("pprof listen at:", config.Pprof)
+		log.Println("default proxy:", config.DefaultProxy)
 
 		if len(config.Pprof) != 0 {
 			go func() {
