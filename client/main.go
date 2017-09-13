@@ -8,11 +8,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"time"
-
-	_ "net/http/pprof"
 
 	"golang.org/x/crypto/pbkdf2"
 
@@ -25,6 +22,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
+	"github.com/ccsexyz/utils"
 )
 
 var (
@@ -372,9 +370,14 @@ func main() {
 		log.Println("pprof listen at:", config.Pprof)
 
 		if len(config.Pprof) != 0 {
-			go func() {
-				log.Println(http.ListenAndServe(config.Pprof, nil))
-			}()
+			if utils.PprofEnabled() {
+				log.Println("run pprof http server at", config.Pprof)
+				go func() {
+					utils.RunProfileHTTPServer(config.Pprof)
+				}()
+			} else {
+				log.Println("set pprof but pprof isn't compiled")
+			}
 		}
 
 		if config.NoHTTP {

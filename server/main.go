@@ -8,7 +8,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"time"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
 	ss "github.com/ccsexyz/shadowsocks-go/shadowsocks"
+	"github.com/ccsexyz/utils"
 )
 
 var (
@@ -383,9 +383,14 @@ func main() {
 		log.Println("default proxy:", config.DefaultProxy)
 
 		if len(config.Pprof) != 0 {
-			go func() {
-				log.Println(http.ListenAndServe(config.Pprof, nil))
-			}()
+			if utils.PprofEnabled() {
+				log.Println("run pprof http server at", config.Pprof)
+				go func() {
+					utils.RunProfileHTTPServer(config.Pprof)
+				}()
+			} else {
+				log.Println("set pprof but pprof isn't compiled")
+			}
 		}
 
 		sigch := make(chan os.Signal, 2)
