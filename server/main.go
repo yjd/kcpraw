@@ -17,12 +17,12 @@ import (
 	"syscall"
 
 	kcpraw "github.com/ccsexyz/kcp-go-raw"
+	ss "github.com/ccsexyz/shadowsocks-go/shadowsocks"
 	"github.com/ccsexyz/smux"
+	"github.com/ccsexyz/utils"
 	"github.com/golang/snappy"
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
-	ss "github.com/ccsexyz/shadowsocks-go/shadowsocks"
-	"github.com/ccsexyz/utils"
 )
 
 var (
@@ -79,25 +79,23 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 			return
 		}
 		go func(conn1 net.Conn) {
-			target := config.Target 
+			target := config.Target
 			if config.DefaultProxy {
 				conn1 = ss.SocksAcceptor(conn1)
 				if conn1 == nil {
-					return 
+					return
 				}
-				dst, err := ss.GetDstConn(conn1)
-				if err != nil {
-					conn1.Close()
-					log.Println(err)
-					return 
+				ssconn, ok := conn1.(ss.Conn)
+				if !ok {
+					return
 				}
-				target = dst.GetDst()
-			} 			
+				target = ssconn.GetDst().String()
+			}
 			conn2, err := net.DialTimeout("tcp", target, 5*time.Second)
 			if err != nil {
 				conn1.Close()
 				log.Println(err)
-				return 
+				return
 			}
 			go handleClient(conn1, conn2)
 		}(p1)
@@ -267,7 +265,7 @@ func main() {
 			Usage: "set the listen address for pprof",
 		},
 		cli.BoolFlag{
-			Name: "proxy",
+			Name:  "proxy",
 			Usage: "enable default proxy(socks4/socks4a/socks5/http)",
 		},
 	}
