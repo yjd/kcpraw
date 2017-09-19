@@ -37,6 +37,7 @@ type Config struct {
 	MulConn      int    `json:"mulconn"`
 	UDP          bool   `json:"udp"`
 	Pprof        string `json:"pprof"`
+	Dummpy       bool   `json:"dummy"`
 }
 
 func parseJSONConfig(config *Config, path string) error {

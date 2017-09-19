@@ -40,7 +40,11 @@ Additional Parameters
 使用 UDP 套接字收发数据  
 
 * proxy (server only)  
-在 服务端集成 socks4/socks4a/socks5/http 代理服务器
+在 服务端集成 socks4/socks4a/socks5/http 代理服务器   
+
+* dummy (client only)
+由操作系统进行三次握手(仅非Linux客户端有效),启用此选项后不再需要去操作 pf/防火墙，在 mac 下不再需要 root 权限   
+*实验性特性，能不用尽量不用*  
 
 Install & Build 
 ---------------

@@ -254,6 +254,10 @@ func main() {
 			Name:  "pprof",
 			Usage: "set the listen address for pprof",
 		},
+		cli.BoolFlag{
+			Name:  "dummy",
+			Usage: "use dummy socket and let the operating system inititate the 3-way handshake",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -287,6 +291,7 @@ func main() {
 		config.MulConn = c.Int("mulconn")
 		config.UDP = c.Bool("udp")
 		config.Pprof = c.String("pprof")
+		config.Dummpy = c.Bool("dummy")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -368,6 +373,7 @@ func main() {
 		log.Println("mulconn:", config.MulConn)
 		log.Println("udp mode:", config.UDP)
 		log.Println("pprof listen at:", config.Pprof)
+		log.Println("dummpy:", config.Dummpy)
 
 		if len(config.Pprof) != 0 {
 			if utils.PprofEnabled() {
@@ -393,6 +399,7 @@ func main() {
 		kcpraw.SetHost(config.Host)
 		kcpraw.SetDSCP(config.DSCP)
 		kcpraw.SetIgnRST(true)
+		kcpraw.SetDummy(config.Dummpy)
 
 		smuxConfig := smux.DefaultConfig()
 		smuxConfig.MaxReceiveBuffer = config.SockBuf
