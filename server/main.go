@@ -72,6 +72,12 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 		return
 	}
 	defer mux.Close()
+	var acceptor ss.Acceptor
+	if config.DefaultProxy {
+		acceptor = ss.GetSocksAcceptor()
+	} else if config.ShadowProxy {
+		acceptor = ss.GetShadowAcceptor(config.ShadowMethod, config.ShadowKey)
+	}
 	for {
 		p1, err := mux.AcceptStream()
 		if err != nil {
@@ -80,15 +86,8 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 		}
 		go func(conn1 net.Conn) {
 			target := config.Target
-			if config.DefaultProxy || config.ShadowProxy {
-				if config.DefaultProxy {
-					conn1 = ss.SocksAcceptor(conn1)
-				} else {
-					if len(config.ShadowKey) == 0 {
-						config.ShadowKey = config.Key
-					}
-					conn1 = ss.ShadowsocksAcceptor(conn1, config.ShadowMethod, config.ShadowKey)
-				}
+			if acceptor != nil {
+				conn1 = acceptor(conn1)
 				if conn1 == nil {
 					return
 				}
@@ -103,6 +102,9 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 				conn1.Close()
 				log.Println(err)
 				return
+			}
+			if target != config.Target {
+				log.Println("proxy to", target)
 			}
 			go handleClient(conn1, conn2)
 		}(p1)
@@ -281,7 +283,7 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:  "ssmethod",
-			Value: "chacha20",
+			Value: "multi",
 			Usage: "set the method of shadowsocks proxy",
 		},
 		cli.StringFlag{
@@ -404,7 +406,7 @@ func main() {
 		log.Println("default proxy:", config.DefaultProxy)
 		log.Println("shadowsocks proxy:", config.ShadowProxy)
 		log.Println("shadowsocks method:", config.ShadowMethod)
-		log.Println("shadowsocks key:", config.ShadowProxy)
+		log.Println("shadowsocks key:", config.ShadowKey)
 
 		if len(config.Pprof) != 0 {
 			if utils.PprofEnabled() {
