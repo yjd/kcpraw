@@ -1,11 +1,15 @@
 #!/bin/bash
 SHA256='shasum -a 256'
+if ! hash shasum 2> /dev/null
+then 
+	SHA256='sha256sum.exe'
+fi
 
 VERSION=`date -u +%Y%m%d`
 LDFLAGS="-X main.VERSION=$VERSION -s -w"
 GCFLAGS=""
 
-OSES=(linux darwin)
+OSES=(linux darwin windows)
 ARCHS=(amd64 386)
 for os in ${OSES[@]}; do
 	for arch in ${ARCHS[@]}; do
@@ -21,9 +25,9 @@ for os in ${OSES[@]}; do
         fi 
         env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -o kcpraw_client_${os}_${arch}${suffix} github.com/ccsexyz/kcpraw/client
         env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -o kcpraw_server_${os}_${arch}${suffix} github.com/ccsexyz/kcpraw/server
-		env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -tags goprof -o kcpraw_client_${os}_${arch}${suffix}_pprof github.com/ccsexyz/kcpraw/client
-        env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -tags goprof -o kcpraw_server_${os}_${arch}${suffix}_pprof github.com/ccsexyz/kcpraw/server
-		tar -zcf kcpraw-${os}-${arch}-$VERSION.tar.gz kcpraw_client_${os}_${arch}${suffix} kcpraw_server_${os}_${arch}${suffix} kcpraw_client_${os}_${arch}${suffix}_pprof kcpraw_server_${os}_${arch}${suffix}_pprof
+		env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -tags goprof -o kcpraw_client_${os}_${arch}_pprof${suffix} github.com/ccsexyz/kcpraw/client
+        env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -tags goprof -o kcpraw_server_${os}_${arch}_pprof${suffix} github.com/ccsexyz/kcpraw/server
+		tar -zcf kcpraw-${os}-${arch}-$VERSION.tar.gz kcpraw_client_${os}_${arch}${suffix} kcpraw_server_${os}_${arch}${suffix} kcpraw_client_${os}_${arch}_pprof${suffix} kcpraw_server_${os}_${arch}_pprof${suffix}
 		$SHA256 kcpraw-${os}-${arch}-$VERSION.tar.gz
 	done
 done

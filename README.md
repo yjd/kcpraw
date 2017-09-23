@@ -15,8 +15,12 @@ Installation
 ============
 
 It is highly recommended to use [kcpraw releases](https://github.com/ccsexyz/kcpraw/releases).  
-Alternatively, you can manually compiled it from source: 
-1.Download and install Go from https://golang.org/dl/ if you don't have go yet.
+
+Note for Windows Users   
+kcpraw is dependent on winpcap.You should download and install it from [winpcap](https://www.winpcap.org/install/default.htm) first.   
+
+Alternatively, you can manually compiled it from source:    
+1.Download and install Go from https://golang.org/dl/ if you don't have go yet.   
 2.Run go get or build.sh   
 
 ```  
@@ -31,7 +35,7 @@ $ ./build.sh
 
 Note for Windows 10 Users
 
-If you're trying to use 64-bit kcpraw(or winpcap) on Windows 10, you might have to do the crazy hijinks detailed at [compile gopacket on windows](http://stackoverflow.com/questions/38047858/compile-gopacket-on-windows-64bit) 
+If you're trying to compile 64-bit kcpraw(or winpcap) on Windows 10, you might have to do the crazy hijinks detailed at [compile gopacket on windows](http://stackoverflow.com/questions/38047858/compile-gopacket-on-windows-64bit) 
 
 Usage
 =====
@@ -119,6 +123,14 @@ GLOBAL OPTIONS:
    --help, -h                       show help
    --version, -v                    print the version
 ```
+
+Features
+========
+* turn udp traffic to tcp traffic  
+* http obfuscating  
+* easy to install & build & use  
+* provide socks5/socks4/socks4a/http & shadowsocks server at kcpraw/server   
+* aggregate multiple underlying connections to one kcp connection   
 
 Report Bugs
 ===========
