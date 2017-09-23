@@ -16,13 +16,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	kcpraw "github.com/ccsexyz/kcp-go-raw"
+	"github.com/ccsexyz/kcp-go-raw"
 	"github.com/ccsexyz/smux"
+	"github.com/ccsexyz/utils"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
-	kcp "github.com/xtaci/kcp-go"
-	"github.com/ccsexyz/utils"
+	"github.com/xtaci/kcp-go"
 )
 
 var (
@@ -30,8 +30,6 @@ var (
 	VERSION = "SELFBUILD"
 	// SALT is use for pbkdf2 key expansion
 	SALT = "kcp-go"
-	// default http host
-	DEFAULTHOST = "www.bing.com"
 )
 
 type compStream struct {
@@ -255,8 +253,8 @@ func main() {
 			Usage: "set the listen address for pprof",
 		},
 		cli.BoolFlag{
-			Name:  "dummy",
-			Usage: "use dummy socket and let the operating system inititate the 3-way handshake",
+			Name:  "nodummy",
+			Usage: "don't use dummy socket",
 		},
 	}
 	myApp.Action = func(c *cli.Context) error {
@@ -291,7 +289,7 @@ func main() {
 		config.MulConn = c.Int("mulconn")
 		config.UDP = c.Bool("udp")
 		config.Pprof = c.String("pprof")
-		config.Dummpy = c.Bool("dummy")
+		config.NoDummpy = c.Bool("nodummy")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -353,6 +351,10 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
+		if !config.NoHTTP && len(config.Host) == 0 {
+			config.NoHTTP = true
+		}
+
 		log.Println("listening on:", listener.Addr())
 		log.Println("encryption:", config.Crypt)
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
@@ -373,7 +375,9 @@ func main() {
 		log.Println("mulconn:", config.MulConn)
 		log.Println("udp mode:", config.UDP)
 		log.Println("pprof listen at:", config.Pprof)
-		log.Println("dummpy:", config.Dummpy)
+		log.Println("dummpy:", !config.NoDummpy)
+		log.Println("nohttp: true")
+		log.Println("httphost: ", config.Host)
 
 		if len(config.Pprof) != 0 {
 			if utils.PprofEnabled() {
@@ -386,20 +390,11 @@ func main() {
 			}
 		}
 
-		if config.NoHTTP {
-			log.Println("nohttp: true")
-		} else {
-			if len(config.Host) == 0 {
-				config.Host = DEFAULTHOST
-			}
-			log.Println("httphost: ", config.Host)
-		}
-
 		kcpraw.SetNoHTTP(config.NoHTTP)
 		kcpraw.SetHost(config.Host)
 		kcpraw.SetDSCP(config.DSCP)
 		kcpraw.SetIgnRST(true)
-		kcpraw.SetDummy(config.Dummpy)
+		kcpraw.SetDummy(!config.NoDummpy)
 
 		smuxConfig := smux.DefaultConfig()
 		smuxConfig.MaxReceiveBuffer = config.SockBuf

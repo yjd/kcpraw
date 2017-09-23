@@ -103,17 +103,18 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 				log.Println(err)
 				return
 			}
+			var suffix string
 			if target != config.Target {
-				log.Println("proxy to", target)
+				suffix = " (" + target + ")"
 			}
-			go handleClient(conn1, conn2)
+			go handleClient(conn1, conn2, suffix)
 		}(p1)
 	}
 }
 
-func handleClient(p1, p2 io.ReadWriteCloser) {
-	log.Println("stream opened")
-	defer log.Println("stream closed")
+func handleClient(p1, p2 io.ReadWriteCloser, suffix string) {
+	log.Println("stream opened", suffix)
+	defer log.Println("stream closed", suffix)
 	defer p1.Close()
 	defer p2.Close()
 
