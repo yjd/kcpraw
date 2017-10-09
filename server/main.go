@@ -278,7 +278,7 @@ func main() {
 			Name:  "proxy",
 			Usage: "enable default proxy(socks4/socks4a/socks5/http)",
 		},
-		cli.StringFlag{
+		cli.BoolFlag{
 			Name:  "ssproxy",
 			Usage: "enable shadowsocks proxy",
 		},

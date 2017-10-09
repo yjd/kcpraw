@@ -19,6 +19,9 @@ It is highly recommended to use [kcpraw releases](https://github.com/ccsexyz/kcp
 Note for Windows Users   
 kcpraw is dependent on winpcap.You should download and install it from [winpcap](https://www.winpcap.org/install/default.htm) first.   
 
+Build
+=====
+
 Alternatively, you can manually compiled it from source:    
 1.Download and install Go from https://golang.org/dl/ if you don't have go yet.   
 2.Run go get or build.sh   
