@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -72,11 +73,14 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 		return
 	}
 	defer mux.Close()
+	args := make(map[string]interface{})
 	var acceptor ss.Acceptor
 	if config.DefaultProxy {
-		acceptor = ss.GetSocksAcceptor()
+		acceptor = ss.GetSocksAcceptor(args)
 	} else if config.ShadowProxy {
-		acceptor = ss.GetShadowAcceptor(config.ShadowMethod, config.ShadowKey)
+		args["method"] = config.ShadowMethod
+		args["password"] = config.ShadowKey
+		acceptor = ss.GetShadowAcceptor(args)
 	}
 	for {
 		p1, err := mux.AcceptStream()
@@ -93,9 +97,14 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 				}
 				ssconn, ok := conn1.(ss.Conn)
 				if !ok {
+					conn1.Close()
 					return
 				}
 				target = ssconn.GetDst().String()
+			}
+			if target == "udprelay:6666" {
+				go handleUDPClient(conn1)
+				return
 			}
 			conn2, err := net.DialTimeout("tcp", target, 5*time.Second)
 			if err != nil {
@@ -109,6 +118,82 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 			}
 			go handleClient(conn1, conn2, suffix)
 		}(p1)
+	}
+}
+
+func handleUDPClient(p1 net.Conn) {
+	defer p1.Close()
+
+	buf := make([]byte, 2048)
+	wbuf := make([]byte, 2048)
+
+	_, err := io.ReadFull(p1, buf[:2])
+	if err != nil {
+		return
+	}
+	sz := int(binary.BigEndian.Uint16(buf[:2]))
+	if sz > len(buf) {
+		return
+	}
+	_, err = io.ReadFull(p1, buf[:sz])
+	if err != nil {
+		return
+	}
+	target := string(buf[:sz])
+
+	p2, err := net.Dial("udp", target)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer p2.Close()
+
+	log.Println("udp opened", target)
+	defer log.Println("udp closed", target)
+
+	p1die := make(chan struct{})
+	p2die := make(chan struct{})
+
+	go func() {
+		defer close(p1die)
+		for {
+			_, err := io.ReadFull(p1, buf[:2])
+			if err != nil {
+				return
+			}
+			sz := int(binary.BigEndian.Uint16(buf[:2]))
+			if sz > len(buf) {
+				return
+			}
+			_, err = io.ReadFull(p1, buf[:sz])
+			if err != nil {
+				return
+			}
+			_, err = p2.Write(buf[:sz])
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer close(p2die)
+		for {
+			n, err := p2.Read(wbuf[2:])
+			if err != nil {
+				return
+			}
+			binary.BigEndian.PutUint16(wbuf, uint16(n))
+			_, err = p1.Write(wbuf[:n+2])
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-p1die:
+	case <-p2die:
 	}
 }
 

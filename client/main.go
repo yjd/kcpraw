@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -17,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/ccsexyz/kcp-go-raw"
+	"github.com/ccsexyz/shadowsocks-go/shadowsocks"
 	"github.com/ccsexyz/smux"
 	"github.com/ccsexyz/utils"
 	"github.com/golang/snappy"
@@ -60,16 +63,183 @@ func newCompStream(conn net.Conn) *compStream {
 	return c
 }
 
-func handleClient(sess *smux.Session, p1 io.ReadWriteCloser) {
-	defer p1.Close()
-	p2, err := sess.OpenStream()
+func handleUDPClient(sess *smux.Session, p1 net.Conn) {
+	var p2 net.Conn
+
+	defer func() {
+		if p1 != nil {
+			p1.Close()
+		}
+		if p2 != nil {
+			p2.Close()
+		}
+	}()
+
+	buf := make([]byte, 2048)
+	n, err := p1.Read(buf)
 	if err != nil {
 		return
 	}
 
-	log.Println("stream opened")
-	defer log.Println("stream closed")
-	defer p2.Close()
+	if n < 3 {
+		return
+	}
+
+	addr, data, err := ss.ParseAddr(buf[3:n])
+	if err != nil || addr == nil {
+		return
+	}
+
+	header := make([]byte, n-len(data))
+	hdrlen := copy(header, buf)
+
+	p2, err = sess.OpenStream()
+	if err != nil {
+		return
+	}
+	err = socks4aHandleShake(p2, "udprelay", 6666)
+	if err != nil {
+		return
+	}
+
+	wbuf := make([]byte, 2048)
+
+	target := addr.String()
+	binary.BigEndian.PutUint16(wbuf, uint16(len(target)))
+	off := 2
+	off += copy(wbuf[off:], target)
+	if len(data) > 0 {
+		binary.BigEndian.PutUint16(wbuf[off:], uint16(len(data)))
+		off += 2
+		off += copy(wbuf[off:], data)
+	}
+
+	_, err = p2.Write(wbuf[:off])
+	if err != nil {
+		return
+	}
+
+	copy(wbuf, header)
+
+	log.Println("udp opened", target)
+	defer log.Println("udp closed", target)
+
+	p1die := make(chan struct{})
+	p2die := make(chan struct{})
+
+	go func() {
+		defer close(p1die)
+		szoff := len(header) - 2
+		for {
+			n, err := p1.Read(buf)
+			if err != nil {
+				return
+			}
+			if n < hdrlen {
+				continue
+			}
+			binary.BigEndian.PutUint16(buf[szoff:], uint16(n-hdrlen))
+			_, err = p2.Write(buf[szoff:n])
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer close(p2die)
+		for {
+			_, err := io.ReadFull(p2, wbuf[hdrlen:hdrlen+2])
+			if err != nil {
+				return
+			}
+			sz := int(binary.BigEndian.Uint16(wbuf[hdrlen : hdrlen+2]))
+			if sz > len(wbuf)-hdrlen {
+				return
+			}
+			_, err = io.ReadFull(p2, wbuf[hdrlen:hdrlen+sz])
+			if err != nil {
+				return
+			}
+			_, err = p1.Write(wbuf[:hdrlen+sz])
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-p1die:
+	case <-p2die:
+	}
+}
+
+func handleClient(sess *smux.Session, p1 net.Conn, cfg *Config) {
+	var p2 net.Conn
+	var target string
+	var direct bool
+	var host string
+	var port int
+	var err error
+
+	defer func() {
+		if p1 != nil {
+			p1.Close()
+		}
+		if p2 != nil {
+			p2.Close()
+		}
+	}()
+
+	if cfg.proxyAcceptor != nil {
+		p1 = cfg.proxyAcceptor(p1)
+		if p1 == nil {
+			return
+		}
+		ssconn, ok := p1.(ss.Conn)
+		if !ok {
+			return
+		}
+		target = ssconn.GetDst().String()
+
+		var portstr string
+		host, portstr, err = net.SplitHostPort(target)
+		if err != nil {
+			return
+		}
+		port, err = strconv.Atoi(portstr)
+		if err != nil {
+			return
+		}
+
+		ip := net.ParseIP(host)
+
+		if ip != nil && cfg.chnRouteCtx != nil {
+			direct = cfg.chnRouteCtx.testIP(ip)
+		} else if cfg.autoProxyCtx != nil {
+			direct = !cfg.autoProxyCtx.checkIfProxy(host)
+		}
+	}
+
+	log.Println("stream opened", target)
+	defer log.Println("stream closed", target)
+
+	if direct {
+		p2, err = net.Dial("tcp", target)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	} else {
+		p2, err = sess.OpenStream()
+		if err != nil {
+			return
+		}
+		err = socks4aHandleShake(p2, host, port)
+		if err != nil {
+			return
+		}
+	}
 
 	// start tunnel
 	p1die := make(chan struct{})
@@ -256,6 +426,18 @@ func main() {
 			Name:  "nodummy",
 			Usage: "don't use dummy socket",
 		},
+		cli.StringFlag{
+			Name:  "proxylist",
+			Usage: "set the path of proxy list",
+		},
+		cli.StringFlag{
+			Name:  "chnroute",
+			Usage: "set the path of china route",
+		},
+		cli.BoolFlag{
+			Name:  "udprelay",
+			Usage: "enable socks5 udp relay",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -290,6 +472,9 @@ func main() {
 		config.UDP = c.Bool("udp")
 		config.Pprof = c.String("pprof")
 		config.NoDummpy = c.Bool("nodummy")
+		config.ProxyList = c.String("proxylist")
+		config.ChnRoute = c.String("chnroute")
+		config.UDPRelay = c.Bool("udprelay")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -378,8 +563,11 @@ func main() {
 		log.Println("udp mode:", config.UDP)
 		log.Println("pprof listen at:", config.Pprof)
 		log.Println("dummpy:", !config.NoDummpy)
-		log.Println("nohttp: true")
-		log.Println("httphost: ", config.Host)
+		log.Println("nohttp:", config.NoHTTP)
+		log.Println("httphost:", config.Host)
+		log.Println("proxylist:", config.ProxyList)
+		log.Println("chnroute:", config.ChnRoute)
+		log.Println("udprelay:", config.UDPRelay)
 
 		if len(config.Pprof) != 0 {
 			if utils.PprofEnabled() {
@@ -390,6 +578,31 @@ func main() {
 			} else {
 				log.Println("set pprof but pprof isn't compiled")
 			}
+		}
+
+		args := make(map[string]interface{})
+
+		if config.UDPRelay {
+			args["localaddr"] = config.LocalAddr
+			args["udprelay"] = true
+		}
+
+		if len(config.ProxyList) != 0 {
+			config.autoProxyCtx = newAutoProxy()
+			config.autoProxyCtx.loadPorxyList(config.ProxyList)
+		}
+
+		if len(config.ChnRoute) != 0 {
+			config.chnRouteCtx = new(chnRouteList)
+			err := config.chnRouteCtx.load(config.ChnRoute)
+			if err != nil {
+				log.Println(err)
+				config.chnRouteCtx = nil
+			}
+		}
+
+		if len(config.ProxyList) != 0 || len(config.ChnRoute) != 0 || config.UDPRelay {
+			config.proxyAcceptor = ss.GetSocksAcceptor(args)
 		}
 
 		kcpraw.SetNoHTTP(config.NoHTTP)
@@ -472,6 +685,31 @@ func main() {
 		go scavenger(chScavenger, config.ScavengeTTL)
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		rr := uint16(0)
+		if config.UDPRelay {
+			udpListener, err := utils.ListenSubUDP("udp", config.LocalAddr)
+			if err != nil {
+				log.Fatalln(err)
+			}
+			go func() {
+				defer udpListener.Close()
+				for {
+					p1, err := udpListener.Accept()
+					if err != nil {
+						log.Fatalln(err)
+					}
+					idx := rr % numconn
+
+					// do auto expiration && reconnection
+					if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
+						chScavenger <- muxes[idx].session
+						muxes[idx].session = waitConn()
+						muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+					}
+					rr++
+					go handleUDPClient(muxes[idx].session, p1)
+				}
+			}()
+		}
 		for {
 			p1, err := listener.AcceptTCP()
 			if err != nil {
@@ -487,7 +725,7 @@ func main() {
 				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
 			}
 
-			go handleClient(muxes[idx].session, p1)
+			go handleClient(muxes[idx].session, p1, &config)
 			rr++
 		}
 	}

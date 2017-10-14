@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"os"
+
+	"github.com/ccsexyz/shadowsocks-go/shadowsocks"
 )
 
 // Config for client
@@ -38,6 +40,13 @@ type Config struct {
 	UDP          bool   `json:"udp"`
 	Pprof        string `json:"pprof"`
 	NoDummpy     bool   `json:"nodummy"`
+	ProxyList    string `json:"proxylist"`
+	ChnRoute     string `json:"chnroute"`
+	UDPRelay     bool   `json:"udprelay"`
+
+	proxyAcceptor ss.Acceptor
+	autoProxyCtx  *autoProxy
+	chnRouteCtx   *chnRouteList
 }
 
 func parseJSONConfig(config *Config, path string) error {
