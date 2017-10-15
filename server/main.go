@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -121,11 +122,17 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 	}
 }
 
+var udpBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 2048)
+	},
+}
+
 func handleUDPClient(p1 net.Conn) {
 	defer p1.Close()
 
-	buf := make([]byte, 2048)
-	wbuf := make([]byte, 2048)
+	buf := udpBufPool.Get().([]byte)
+	defer udpBufPool.Put(buf)
 
 	_, err := io.ReadFull(p1, buf[:2])
 	if err != nil {
@@ -148,53 +155,10 @@ func handleUDPClient(p1 net.Conn) {
 	}
 	defer p2.Close()
 
-	log.Println("udp opened", target)
-	defer log.Println("udp closed", target)
+	log.Println("udp opened", "("+target+")")
+	defer log.Println("udp closed", "("+target+")")
 
-	p1die := make(chan struct{})
-	p2die := make(chan struct{})
-
-	go func() {
-		defer close(p1die)
-		for {
-			_, err := io.ReadFull(p1, buf[:2])
-			if err != nil {
-				return
-			}
-			sz := int(binary.BigEndian.Uint16(buf[:2]))
-			if sz > len(buf) {
-				return
-			}
-			_, err = io.ReadFull(p1, buf[:sz])
-			if err != nil {
-				return
-			}
-			_, err = p2.Write(buf[:sz])
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	go func() {
-		defer close(p2die)
-		for {
-			n, err := p2.Read(wbuf[2:])
-			if err != nil {
-				return
-			}
-			binary.BigEndian.PutUint16(wbuf, uint16(n))
-			_, err = p1.Write(wbuf[:n+2])
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-p1die:
-	case <-p2die:
-	}
+	utils.PipeUDPOverTCP(p2, p1, &udpBufPool, time.Second*5, nil)
 }
 
 func handleClient(p1, p2 io.ReadWriteCloser, suffix string) {

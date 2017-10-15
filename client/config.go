@@ -43,10 +43,19 @@ type Config struct {
 	ProxyList    string `json:"proxylist"`
 	ChnRoute     string `json:"chnroute"`
 	UDPRelay     bool   `json:"udprelay"`
+	Proxy        bool   `json:"proxy"`
+
+	Tunnels []*tunnelConfig `json:"tunnels"`
 
 	proxyAcceptor ss.Acceptor
 	autoProxyCtx  *autoProxy
 	chnRouteCtx   *chnRouteList
+}
+
+type tunnelConfig struct {
+	Type       string `json:"type"` // tcp or udp
+	LocalAddr  string `json:"localaddr"`
+	RemoteAddr string `json:"remoteaddr"`
 }
 
 func parseJSONConfig(config *Config, path string) error {

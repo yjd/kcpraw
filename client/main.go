@@ -10,7 +10,8 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -19,6 +20,7 @@ import (
 	"syscall"
 
 	"github.com/ccsexyz/kcp-go-raw"
+	"github.com/ccsexyz/shadowsocks-go/redir"
 	"github.com/ccsexyz/shadowsocks-go/shadowsocks"
 	"github.com/ccsexyz/smux"
 	"github.com/ccsexyz/utils"
@@ -63,19 +65,57 @@ func newCompStream(conn net.Conn) *compStream {
 	return c
 }
 
-func handleUDPClient(sess *smux.Session, p1 net.Conn) {
-	var p2 net.Conn
+var udpBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 2048)
+	},
+}
 
+func handleTunnelUDPClient(sess *smux.Session, p1 net.Conn, target string) {
+	defer p1.Close()
+
+	if len(target) > 256 {
+		return
+	}
+
+	p2, err := sess.OpenStream()
+	if err != nil {
+		return
+	}
+	defer p2.Close()
+
+	err = socks4aHandleShake(p2, "udprelay", 6666)
+	if err != nil {
+		return
+	}
+
+	buf := udpBufPool.Get().([]byte)
+	binary.BigEndian.PutUint16(buf[:2], uint16(len(target)))
+	copy(buf[2:], target)
+
+	_, err = p2.Write(buf[:len(target)+2])
+	udpBufPool.Put(buf)
+	buf = nil
+	if err != nil {
+		return
+	}
+
+	log.Println("udp tunnel opened", target)
+	defer log.Println("udp tunnel closed", target)
+
+	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*5, nil)
+}
+
+func handleUDPClient(sess *smux.Session, p1 net.Conn) {
+	defer p1.Close()
+
+	buf := udpBufPool.Get().([]byte)
 	defer func() {
-		if p1 != nil {
-			p1.Close()
-		}
-		if p2 != nil {
-			p2.Close()
+		if buf != nil {
+			udpBufPool.Put(buf)
 		}
 	}()
 
-	buf := make([]byte, 2048)
 	n, err := p1.Read(buf)
 	if err != nil {
 		return
@@ -91,18 +131,25 @@ func handleUDPClient(sess *smux.Session, p1 net.Conn) {
 	}
 
 	header := make([]byte, n-len(data))
-	hdrlen := copy(header, buf)
+	copy(header, buf)
 
-	p2, err = sess.OpenStream()
+	p2, err := sess.OpenStream()
 	if err != nil {
 		return
 	}
+	defer p2.Close()
+
 	err = socks4aHandleShake(p2, "udprelay", 6666)
 	if err != nil {
 		return
 	}
 
-	wbuf := make([]byte, 2048)
+	wbuf := udpBufPool.Get().([]byte)
+	defer func() {
+		if wbuf != nil {
+			udpBufPool.Put(wbuf)
+		}
+	}()
 
 	target := addr.String()
 	binary.BigEndian.PutUint16(wbuf, uint16(len(target)))
@@ -119,110 +166,79 @@ func handleUDPClient(sess *smux.Session, p1 net.Conn) {
 		return
 	}
 
-	copy(wbuf, header)
-
 	log.Println("udp opened", target)
 	defer log.Println("udp closed", target)
 
-	p1die := make(chan struct{})
-	p2die := make(chan struct{})
+	udpBufPool.Put(buf)
+	udpBufPool.Put(wbuf)
+	buf = nil
+	wbuf = nil
 
-	go func() {
-		defer close(p1die)
-		szoff := len(header) - 2
-		for {
-			n, err := p1.Read(buf)
-			if err != nil {
-				return
-			}
-			if n < hdrlen {
-				continue
-			}
-			binary.BigEndian.PutUint16(buf[szoff:], uint16(n-hdrlen))
-			_, err = p2.Write(buf[szoff:n])
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	go func() {
-		defer close(p2die)
-		for {
-			_, err := io.ReadFull(p2, wbuf[hdrlen:hdrlen+2])
-			if err != nil {
-				return
-			}
-			sz := int(binary.BigEndian.Uint16(wbuf[hdrlen : hdrlen+2]))
-			if sz > len(wbuf)-hdrlen {
-				return
-			}
-			_, err = io.ReadFull(p2, wbuf[hdrlen:hdrlen+sz])
-			if err != nil {
-				return
-			}
-			_, err = p1.Write(wbuf[:hdrlen+sz])
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-p1die:
-	case <-p2die:
-	}
+	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*5, header)
 }
 
-func handleClient(sess *smux.Session, p1 net.Conn, cfg *Config) {
-	var p2 net.Conn
-	var target string
-	var direct bool
-	var host string
-	var port int
-	var err error
+func handleTunnelClient(sess *smux.Session, p1 net.Conn, host string, port int) {
+	defer p1.Close()
 
+	if len(host) == 0 || port == 0 {
+		return
+	}
+
+	p2, err := sess.OpenStream()
+	if err != nil {
+		return
+	}
+	defer p2.Close()
+
+	err = socks4aHandleShake(p2, host, port)
+	if err != nil {
+		return
+	}
+
+	log.Println("tcp tunnel opened", host, port)
+	defer log.Println("tcp tunnel closed", host, port)
+
+	pipe(p1, p2)
+}
+
+func handleProxyClient(sess *smux.Session, p1 net.Conn, cfg *Config) {
 	defer func() {
 		if p1 != nil {
 			p1.Close()
 		}
+	}()
+
+	p1 = cfg.proxyAcceptor(p1)
+	if p1 == nil {
+		return
+	}
+
+	ssconn, ok := p1.(ss.Conn)
+	if !ok {
+		return
+	}
+	target := ssconn.GetDst().String()
+
+	host, port, err := utils.SplitHostAndPort(target)
+	if err != nil {
+		return
+	}
+
+	var direct bool
+	ip := net.ParseIP(host)
+
+	if ip != nil && cfg.chnRouteCtx != nil {
+		direct = cfg.chnRouteCtx.testIP(ip)
+	} else if cfg.autoProxyCtx != nil {
+		direct = !cfg.autoProxyCtx.checkIfProxy(host)
+	}
+
+	var p2 net.Conn
+	defer func() {
 		if p2 != nil {
 			p2.Close()
 		}
 	}()
-
-	if cfg.proxyAcceptor != nil {
-		p1 = cfg.proxyAcceptor(p1)
-		if p1 == nil {
-			return
-		}
-		ssconn, ok := p1.(ss.Conn)
-		if !ok {
-			return
-		}
-		target = ssconn.GetDst().String()
-
-		var portstr string
-		host, portstr, err = net.SplitHostPort(target)
-		if err != nil {
-			return
-		}
-		port, err = strconv.Atoi(portstr)
-		if err != nil {
-			return
-		}
-
-		ip := net.ParseIP(host)
-
-		if ip != nil && cfg.chnRouteCtx != nil {
-			direct = cfg.chnRouteCtx.testIP(ip)
-		} else if cfg.autoProxyCtx != nil {
-			direct = !cfg.autoProxyCtx.checkIfProxy(host)
-		}
-	}
-
-	log.Println("stream opened", target)
-	defer log.Println("stream closed", target)
 
 	if direct {
 		p2, err = net.Dial("tcp", target)
@@ -235,12 +251,33 @@ func handleClient(sess *smux.Session, p1 net.Conn, cfg *Config) {
 		if err != nil {
 			return
 		}
-		err = socks4aHandleShake(p2, host, port)
-		if err != nil {
-			return
+		if len(host) != 0 && port > 0 {
+			err = socks4aHandleShake(p2, host, port)
+			if err != nil {
+				return
+			}
 		}
 	}
 
+	pipe(p1, p2)
+}
+
+func handleClient(sess *smux.Session, p1 net.Conn) {
+	defer p1.Close()
+
+	p2, err := sess.OpenStream()
+	if err != nil {
+		return
+	}
+	defer p2.Close()
+
+	log.Println("stream opened")
+	defer log.Println("stream closed")
+
+	pipe(p1, p2)
+}
+
+func pipe(p1, p2 net.Conn) {
 	// start tunnel
 	p1die := make(chan struct{})
 	go func() { io.Copy(p1, p2); close(p1die) }()
@@ -435,8 +472,16 @@ func main() {
 			Usage: "set the path of china route",
 		},
 		cli.BoolFlag{
+			Name:  "proxy",
+			Usage: "enable default proxy(socks4/socks4a/socks5/http)",
+		},
+		cli.BoolFlag{
 			Name:  "udprelay",
 			Usage: "enable socks5 udp relay",
+		},
+		cli.StringFlag{
+			Name:  "tunnels",
+			Usage: "provide additional tcp/udp tunnels, eg: udp,:10000,8.8.8.8:53;tcp,:10080,www.google.com:80",
 		},
 	}
 	myApp.Action = func(c *cli.Context) error {
@@ -475,6 +520,8 @@ func main() {
 		config.ProxyList = c.String("proxylist")
 		config.ChnRoute = c.String("chnroute")
 		config.UDPRelay = c.Bool("udprelay")
+		config.Proxy = c.Bool("proxy")
+		tunnels := c.String("tunnels")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
@@ -542,6 +589,24 @@ func main() {
 			config.NoHTTP = true
 		}
 
+		if len(tunnels) != 0 {
+			for _, t := range strings.Split(tunnels, ";") {
+				tcs := strings.Split(t, ",")
+				if len(tcs) != 3 || len(tcs[1]) == 0 || len(tcs[2]) == 0 {
+					continue
+				}
+				config.Tunnels = append(config.Tunnels, &tunnelConfig{
+					Type:       tcs[0],
+					LocalAddr:  tcs[1],
+					RemoteAddr: tcs[2],
+				})
+			}
+		}
+
+		if len(config.ProxyList) != 0 || len(config.ChnRoute) != 0 || config.UDPRelay {
+			config.Proxy = true
+		}
+
 		log.Println("listening on:", listener.Addr())
 		log.Println("encryption:", config.Crypt)
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
@@ -565,6 +630,7 @@ func main() {
 		log.Println("dummpy:", !config.NoDummpy)
 		log.Println("nohttp:", config.NoHTTP)
 		log.Println("httphost:", config.Host)
+		log.Println("proxy:", config.Proxy)
 		log.Println("proxylist:", config.ProxyList)
 		log.Println("chnroute:", config.ChnRoute)
 		log.Println("udprelay:", config.UDPRelay)
@@ -601,7 +667,7 @@ func main() {
 			}
 		}
 
-		if len(config.ProxyList) != 0 || len(config.ChnRoute) != 0 || config.UDPRelay {
+		if config.Proxy {
 			config.proxyAcceptor = ss.GetSocksAcceptor(args)
 		}
 
@@ -685,6 +751,24 @@ func main() {
 		go scavenger(chScavenger, config.ScavengeTTL)
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		rr := uint16(0)
+		var rrLock sync.Mutex
+		dialSession := func() *smux.Session {
+			rrLock.Lock()
+			defer rrLock.Unlock()
+
+			idx := rr % numconn
+
+			// do auto expiration && reconnection
+			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
+				chScavenger <- muxes[idx].session
+				muxes[idx].session = waitConn()
+				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+			}
+			rr++
+
+			return muxes[idx].session
+		}
+
 		if config.UDPRelay {
 			udpListener, err := utils.ListenSubUDP("udp", config.LocalAddr)
 			if err != nil {
@@ -697,18 +781,78 @@ func main() {
 					if err != nil {
 						log.Fatalln(err)
 					}
-					idx := rr % numconn
-
-					// do auto expiration && reconnection
-					if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
-						chScavenger <- muxes[idx].session
-						muxes[idx].session = waitConn()
-						muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+					session := dialSession()
+					if session == nil {
+						p1.Close()
+						continue
 					}
-					rr++
-					go handleUDPClient(muxes[idx].session, p1)
+					go handleUDPClient(session, p1)
 				}
 			}()
+		}
+		runUDPTunnelListener := func(ctx *tunnelConfig) {
+			if len(ctx.LocalAddr) == 0 || len(ctx.RemoteAddr) == 0 || len(ctx.RemoteAddr) > 256 {
+				return
+			}
+			log.Println("run udp tunnel:", ctx.LocalAddr, "->", ctx.RemoteAddr)
+			udpListener, err := utils.ListenSubUDP("udp", ctx.LocalAddr)
+			if err != nil {
+				log.Fatalln(err)
+			}
+			defer udpListener.Close()
+			for {
+				p1, err := udpListener.Accept()
+				if err != nil {
+					log.Fatalln(err)
+				}
+				session := dialSession()
+				if session == nil {
+					p1.Close()
+					continue
+				}
+				go handleTunnelUDPClient(session, p1, ctx.RemoteAddr)
+			}
+		}
+		runTCPTunnelListener := func(ctx *tunnelConfig) {
+			if config.proxyAcceptor == nil {
+				return
+			}
+			log.Println("run tcp tunnel:", ctx.LocalAddr, "->", ctx.RemoteAddr)
+			tcpAddr, err := net.ResolveTCPAddr("tcp", ctx.LocalAddr)
+			if err != nil {
+				log.Fatalln(err)
+			}
+			tcpTunnelListener, err := net.ListenTCP("tcp", tcpAddr)
+			checkError(err)
+			defer tcpTunnelListener.Close()
+			host, port, err := utils.SplitHostAndPort(ctx.RemoteAddr)
+			if err != nil {
+				log.Fatalln(err)
+			}
+			for {
+				p1, err := tcpTunnelListener.Accept()
+				if err != nil {
+					log.Fatalln(err)
+				}
+				go func(conn net.Conn) {
+					session := dialSession()
+					if session == nil {
+						conn.Close()
+						return
+					}
+					handleTunnelClient(session, p1, host, port)
+				}(p1)
+			}
+		}
+		for _, tunnel := range config.Tunnels {
+			if tunnel.Type == "udp" {
+				if config.UDPRelay != true {
+					continue
+				}
+				go runUDPTunnelListener(tunnel)
+			} else {
+				go runTCPTunnelListener(tunnel)
+			}
 		}
 		for {
 			p1, err := listener.AcceptTCP()
@@ -716,17 +860,32 @@ func main() {
 				log.Fatalln(err)
 			}
 			checkError(err)
-			idx := rr % numconn
+			go func(conn net.Conn) {
+				session := dialSession()
+				if session == nil {
+					conn.Close()
+					return
+				}
 
-			// do auto expiration && reconnection
-			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
-				chScavenger <- muxes[idx].session
-				muxes[idx].session = waitConn()
-				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
-			}
+				target, _ := redir.GetOrigDst(conn)
+				if (len(target) != 0 && target == conn.LocalAddr().String()) ||
+					config.proxyAcceptor == nil {
+					target = ""
+				}
 
-			go handleClient(muxes[idx].session, p1, &config)
-			rr++
+				if len(target) > 0 {
+					host, port, err := utils.SplitHostAndPort(target)
+					if err != nil {
+						conn.Close()
+						return
+					}
+					handleTunnelClient(session, conn, host, port)
+				} else if config.proxyAcceptor != nil {
+					handleProxyClient(session, conn, &config)
+				} else {
+					handleClient(session, conn)
+				}
+			}(p1)
 		}
 	}
 	myApp.Run(os.Args)
