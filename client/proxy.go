@@ -3,15 +3,32 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync"
 
+	"github.com/ccsexyz/shadowsocks-go/shadowsocks"
 	"github.com/ccsexyz/utils"
 )
 
-func socks4aHandleShake(conn net.Conn, host string, port int) error {
+func socks6HandShake(conn net.Conn, host string, port int) error {
+	if len(host) > 255 {
+		return fmt.Errorf("host length can't be greater than 255")
+	}
+	buf := make([]byte, 512)
+	buf[0] = 6
+	buf[1] = 1
+	n := ss.PutHeader(buf[2:], host, port)
+	_, err := conn.Write(buf[:2+n])
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func socks4aHandShake(conn net.Conn, host string, port int) error {
 	buf := make([]byte, 512)
 	buf[0] = 0x4
 	buf[1] = 0x1

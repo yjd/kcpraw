@@ -84,7 +84,7 @@ func handleTunnelUDPClient(sess *smux.Session, p1 net.Conn, target string) {
 	}
 	defer p2.Close()
 
-	err = socks4aHandleShake(p2, "udprelay", 6666)
+	err = socks6HandShake(p2, "udprelay", 6666)
 	if err != nil {
 		return
 	}
@@ -103,7 +103,12 @@ func handleTunnelUDPClient(sess *smux.Session, p1 net.Conn, target string) {
 	log.Println("udp tunnel opened", target)
 	defer log.Println("udp tunnel closed", target)
 
-	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*5, nil)
+	tosec := 60
+	if strings.HasSuffix(target, ":53") {
+		tosec = 5
+	}
+
+	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*time.Duration(tosec), nil)
 }
 
 func handleUDPClient(sess *smux.Session, p1 net.Conn) {
@@ -139,7 +144,7 @@ func handleUDPClient(sess *smux.Session, p1 net.Conn) {
 	}
 	defer p2.Close()
 
-	err = socks4aHandleShake(p2, "udprelay", 6666)
+	err = socks6HandShake(p2, "udprelay", 6666)
 	if err != nil {
 		return
 	}
@@ -174,7 +179,12 @@ func handleUDPClient(sess *smux.Session, p1 net.Conn) {
 	buf = nil
 	wbuf = nil
 
-	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*5, header)
+	tosec := 60
+	if strings.HasSuffix(target, ":53") {
+		tosec = 5
+	}
+
+	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*time.Duration(tosec), header)
 }
 
 func handleTunnelClient(sess *smux.Session, p1 net.Conn, host string, port int) {
@@ -190,7 +200,7 @@ func handleTunnelClient(sess *smux.Session, p1 net.Conn, host string, port int) 
 	}
 	defer p2.Close()
 
-	err = socks4aHandleShake(p2, host, port)
+	err = socks6HandShake(p2, host, port)
 	if err != nil {
 		return
 	}
@@ -252,12 +262,20 @@ func handleProxyClient(sess *smux.Session, p1 net.Conn, cfg *Config) {
 			return
 		}
 		if len(host) != 0 && port > 0 {
-			err = socks4aHandleShake(p2, host, port)
+			err = socks6HandShake(p2, host, port)
 			if err != nil {
 				return
 			}
 		}
 	}
+
+	var directStr string
+	if direct {
+		directStr = "direct"
+	}
+
+	log.Println("stream opened", target, directStr)
+	defer log.Println("stream closed", target, directStr)
 
 	pipe(p1, p2)
 }

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,7 +159,12 @@ func handleUDPClient(p1 net.Conn) {
 	log.Println("udp opened", "("+target+")")
 	defer log.Println("udp closed", "("+target+")")
 
-	utils.PipeUDPOverTCP(p2, p1, &udpBufPool, time.Second*5, nil)
+	tosec := 60
+	if strings.HasSuffix(target, ":53") {
+		tosec = 5
+	}
+
+	utils.PipeUDPOverTCP(p2, p1, &udpBufPool, time.Second*time.Duration(tosec), nil)
 }
 
 func handleClient(p1, p2 io.ReadWriteCloser, suffix string) {
