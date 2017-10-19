@@ -18,10 +18,10 @@ for os in ${OSES[@]}; do
 		then
 			suffix=".exe"
 		fi
-        cgo_enabled=1
-        if [ "$os" == "linux" ]
+        cgo_enabled=0
+        if [ "$os" == "windows" ]
         then 
-            cgo_enabled=0
+            cgo_enabled=1
         fi 
         env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -o kcpraw_client_${os}_${arch}${suffix} github.com/ccsexyz/kcpraw/client
         env CGO_ENABLED=$cgo_enabled GOOS=$os GOARCH=$arch go build -ldflags "$LDFLAGS" -gcflags "$GCFLAGS" -o kcpraw_server_${os}_${arch}${suffix} github.com/ccsexyz/kcpraw/server
