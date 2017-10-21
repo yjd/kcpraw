@@ -344,7 +344,7 @@ func main() {
 		cli.StringFlag{
 			Name:  "crypt",
 			Value: "aes",
-			Usage: "aes, aes-128, aes-192, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none",
+			Usage: "aes, aes-128, aes-192, chacha20, salsa20, blowfish, twofish, cast5, 3des, tea, xtea, xor, sm4, none",
 		},
 		cli.StringFlag{
 			Name:  "mode",
@@ -598,6 +598,8 @@ func main() {
 			block, _ = kcp.NewXTEABlockCrypt(pass[:16])
 		case "salsa20":
 			block, _ = kcp.NewSalsa20BlockCrypt(pass)
+		case "chacha20":
+			block, _ = utils.NewChaCha20BlockCrypt(pass)
 		default:
 			config.Crypt = "aes"
 			block, _ = kcp.NewAESBlockCrypt(pass)
