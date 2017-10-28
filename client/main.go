@@ -730,6 +730,7 @@ func main() {
 			if err != nil {
 				return nil, errors.Wrap(err, "createConn()")
 			}
+			log.Println("connection:", kcpconn.LocalAddr(), "->", kcpconn.RemoteAddr())
 			return session, nil
 		}
 
@@ -744,49 +745,66 @@ func main() {
 			}
 		}
 
-		numconn := uint16(config.Conn)
-		muxes := make([]struct {
+		type muxSessInfo struct {
 			session *smux.Session
 			ttl     time.Time
-		}, numconn)
-
-		for k := range muxes {
-			sess, err := createConn()
-			checkError(err)
-			muxes[k].session = sess
-			muxes[k].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
 		}
+		var mmuxes [][]muxSessInfo
 
 		sigch := make(chan os.Signal, 2)
 		signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigch
-			for _, v := range muxes {
-				v.session.Close()
+			for _, muxes := range mmuxes {
+				for _, m := range muxes {
+					m.session.Close()
+				}
 			}
 			os.Exit(1)
 		}()
 
-		chScavenger := make(chan *smux.Session, 128)
-		go scavenger(chScavenger, config.ScavengeTTL)
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
-		rr := uint16(0)
-		var rrLock sync.Mutex
-		dialSession := func() *smux.Session {
-			rrLock.Lock()
-			defer rrLock.Unlock()
 
-			idx := rr % numconn
+		newSessionDailer := func() func() *smux.Session {
+			numconn := uint16(config.Conn)
+			muxes := make([]muxSessInfo, numconn)
+			mmuxes = append(mmuxes, muxes)
 
-			// do auto expiration && reconnection
-			if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
-				chScavenger <- muxes[idx].session
-				muxes[idx].session = waitConn()
-				muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+			for k := range muxes {
+				sess, err := createConn()
+				checkError(err)
+				muxes[k].session = sess
+				muxes[k].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
 			}
-			rr++
 
-			return muxes[idx].session
+			chScavenger := make(chan *smux.Session, 128)
+			go scavenger(chScavenger, config.ScavengeTTL)
+			rr := uint16(0)
+			var rrLock sync.Mutex
+			return func() *smux.Session {
+				rrLock.Lock()
+				defer rrLock.Unlock()
+
+				idx := rr % numconn
+
+				// do auto expiration && reconnection
+				if muxes[idx].session.IsClosed() || (config.AutoExpire > 0 && time.Now().After(muxes[idx].ttl)) {
+					chScavenger <- muxes[idx].session
+					muxes[idx].session = waitConn()
+					muxes[idx].ttl = time.Now().Add(time.Duration(config.AutoExpire) * time.Second)
+				}
+				rr++
+
+				return muxes[idx].session
+			}
+		}
+
+		dialSessionForTCP := newSessionDailer()
+		var dialSessionForUDPImp func() *smux.Session
+		var udpDialerOnce sync.Once
+		dialSessionForUDP := func() *smux.Session {
+			udpDialerOnce.Do(func() { dialSessionForUDPImp = newSessionDailer() })
+			return dialSessionForUDPImp()
 		}
 
 		if config.UDPRelay {
@@ -801,7 +819,7 @@ func main() {
 					if err != nil {
 						log.Fatalln(err)
 					}
-					session := dialSession()
+					session := dialSessionForUDP()
 					if session == nil {
 						p1.Close()
 						continue
@@ -825,7 +843,7 @@ func main() {
 				if err != nil {
 					log.Fatalln(err)
 				}
-				session := dialSession()
+				session := dialSessionForUDP()
 				if session == nil {
 					p1.Close()
 					continue
@@ -855,7 +873,7 @@ func main() {
 					log.Fatalln(err)
 				}
 				go func(conn net.Conn) {
-					session := dialSession()
+					session := dialSessionForTCP()
 					if session == nil {
 						conn.Close()
 						return
@@ -881,7 +899,7 @@ func main() {
 			}
 			checkError(err)
 			go func(conn net.Conn) {
-				session := dialSession()
+				session := dialSessionForTCP()
 				if session == nil {
 					conn.Close()
 					return
