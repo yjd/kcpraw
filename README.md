@@ -15,6 +15,7 @@ Features
 ========
 * turn udp traffic to tcp traffic  
 * http obfuscating  
+* tls obfuscating  
 * easy to install & build & use  
 * provide socks5/socks4/socks4a/http & shadowsocks server at kcpraw/server   
 * support socks5 udp-associate   

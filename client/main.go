@@ -501,6 +501,10 @@ func main() {
 			Name:  "tunnels",
 			Usage: "provide additional tcp/udp tunnels, eg: udp,:10000,8.8.8.8:53;tcp,:10080,www.google.com:80",
 		},
+		cli.BoolFlag{
+			Name:  "tls",
+			Usage: "enable tls-obfs",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -539,6 +543,7 @@ func main() {
 		config.ChnRoute = c.String("chnroute")
 		config.UDPRelay = c.Bool("udprelay")
 		config.Proxy = c.Bool("proxy")
+		config.TLS = c.Bool("tls")
 		tunnels := c.String("tunnels")
 
 		if c.String("c") != "" {
@@ -692,6 +697,7 @@ func main() {
 		}
 
 		kcpraw.SetNoHTTP(config.NoHTTP)
+		kcpraw.SetTLS(config.TLS)
 		kcpraw.SetHost(config.Host)
 		kcpraw.SetDSCP(config.DSCP)
 		kcpraw.SetIgnRST(true)
