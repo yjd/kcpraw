@@ -80,8 +80,8 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 	if config.DefaultProxy {
 		acceptor = ss.GetSocksAcceptor(args)
 	} else if config.ShadowProxy {
-		args["method"] = config.ShadowMethod
-		args["password"] = config.ShadowKey
+		args["method"] = "multi"
+		args["password"] = config.Key
 		acceptor = ss.GetShadowAcceptor(args)
 	}
 	for {
@@ -337,15 +337,6 @@ func main() {
 			Name:  "ssproxy",
 			Usage: "enable shadowsocks proxy",
 		},
-		cli.StringFlag{
-			Name:  "ssmethod",
-			Value: "multi",
-			Usage: "set the method of shadowsocks proxy",
-		},
-		cli.StringFlag{
-			Name:  "sskey",
-			Usage: "set the password of shadowsocks proxy",
-		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -376,8 +367,6 @@ func main() {
 		config.Pprof = c.String("pprof")
 		config.DefaultProxy = c.Bool("proxy")
 		config.ShadowProxy = c.Bool("ssproxy")
-		config.ShadowMethod = c.String("ssmethod")
-		config.ShadowKey = c.String("sskey")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -465,8 +454,6 @@ func main() {
 		log.Println("pprof listen at:", config.Pprof)
 		log.Println("default proxy:", config.DefaultProxy)
 		log.Println("shadowsocks proxy:", config.ShadowProxy)
-		log.Println("shadowsocks method:", config.ShadowMethod)
-		log.Println("shadowsocks key:", config.ShadowKey)
 
 		if len(config.Pprof) != 0 {
 			if utils.PprofEnabled() {

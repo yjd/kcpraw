@@ -34,8 +34,6 @@ type Config struct {
 	Pprof        string `json:"pprof"`
 	DefaultProxy bool   `json:"proxy"`
 	ShadowProxy  bool   `json:"ssproxy"`
-	ShadowMethod string `json:"ssmethod"`
-	ShadowKey    string `json:"sskey"`
 }
 
 func parseJSONConfig(config *Config, path string) error {
