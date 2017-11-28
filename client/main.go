@@ -455,9 +455,9 @@ func main() {
 			Value: "",
 			Usage: "hostname for obfuscating (Experimental)",
 		},
-		cli.BoolFlag{
-			Name:  "nohttp",
-			Usage: "don't send http request after tcp 3-way handshake",
+		cli.StringFlag{
+			Name:  "obfs",
+			Usage: "obfuscating method, http/tls",
 		},
 		cli.IntFlag{
 			Name:  "scavengettl",
@@ -501,10 +501,6 @@ func main() {
 			Name:  "tunnels",
 			Usage: "provide additional tcp/udp tunnels, eg: udp,:10000,8.8.8.8:53;tcp,:10080,www.google.com:80",
 		},
-		cli.BoolFlag{
-			Name:  "tls",
-			Usage: "enable tls-obfs",
-		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -532,7 +528,7 @@ func main() {
 		config.Log = c.String("log")
 		config.SnmpLog = c.String("snmplog")
 		config.SnmpPeriod = c.Int("snmpperiod")
-		config.NoHTTP = c.Bool("nohttp")
+		config.Obfs = c.String("obfs")
 		config.Host = c.String("host")
 		config.ScavengeTTL = c.Int("scavengettl")
 		config.MulConn = c.Int("mulconn")
@@ -543,7 +539,6 @@ func main() {
 		config.ChnRoute = c.String("chnroute")
 		config.UDPRelay = c.Bool("udprelay")
 		config.Proxy = c.Bool("proxy")
-		config.TLS = c.Bool("tls")
 		tunnels := c.String("tunnels")
 
 		if c.String("c") != "" {
@@ -610,8 +605,8 @@ func main() {
 			block, _ = kcp.NewAESBlockCrypt(pass)
 		}
 
-		if !config.NoHTTP && len(config.Host) == 0 {
-			config.NoHTTP = true
+		if len(config.Host) == 0 {
+			config.Obfs = ""
 		}
 
 		if len(tunnels) != 0 {
@@ -653,7 +648,7 @@ func main() {
 		log.Println("udp mode:", config.UDP)
 		log.Println("pprof listen at:", config.Pprof)
 		log.Println("dummpy:", !config.NoDummpy)
-		log.Println("nohttp:", config.NoHTTP)
+		log.Println("obfs:", config.Obfs)
 		log.Println("httphost:", config.Host)
 		log.Println("proxy:", config.Proxy)
 		log.Println("proxylist:", config.ProxyList)
@@ -696,8 +691,14 @@ func main() {
 			config.proxyAcceptor = ss.GetSocksAcceptor(args)
 		}
 
-		kcpraw.SetNoHTTP(config.NoHTTP)
-		kcpraw.SetTLS(config.TLS)
+		switch config.Obfs {
+		case "tls":
+			kcpraw.SetNoHTTP(true)
+			kcpraw.SetTLS(true)
+		case "http":
+		default:
+			kcpraw.SetNoHTTP(true)
+		}
 		kcpraw.SetHost(config.Host)
 		kcpraw.SetDSCP(config.DSCP)
 		kcpraw.SetIgnRST(true)

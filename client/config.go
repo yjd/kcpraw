@@ -33,7 +33,7 @@ type Config struct {
 	Log          string `json:"log"`
 	SnmpLog      string `json:"snmplog"`
 	SnmpPeriod   int    `json:"snmpperiod"`
-	NoHTTP       bool   `json:"nohttp"`
+	Obfs         string `json:"obfs"`
 	Host         string `json:"host"`
 	ScavengeTTL  int    `json:"scavengettl"`
 	MulConn      int    `json:"mulconn"`
@@ -44,7 +44,6 @@ type Config struct {
 	ChnRoute     string `json:"chnroute"`
 	UDPRelay     bool   `json:"udprelay"`
 	Proxy        bool   `json:"proxy"`
-	TLS          bool   `json:"tls"`
 
 	Tunnels []*tunnelConfig `json:"tunnels"`
 
