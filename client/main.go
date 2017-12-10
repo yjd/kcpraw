@@ -491,7 +491,7 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:  "proxy",
-			Usage: "enable default proxy(socks4/socks4a/socks5/http)",
+			Usage: "enable default proxy(socks4/socks4a/socks5/http/shadowsocks)",
 		},
 		cli.BoolFlag{
 			Name:  "udprelay",
@@ -688,7 +688,8 @@ func main() {
 		}
 
 		if config.Proxy {
-			config.proxyAcceptor = ss.GetSocksAcceptor(args)
+			args["password"] = config.Key
+			config.proxyAcceptor = ss.GetShadowAcceptor(args)
 		}
 
 		switch config.Obfs {

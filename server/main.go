@@ -78,8 +78,6 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 	args := make(map[string]interface{})
 	var acceptor ss.Acceptor
 	if config.DefaultProxy {
-		acceptor = ss.GetSocksAcceptor(args)
-	} else if config.ShadowProxy {
 		args["method"] = "multi"
 		args["password"] = config.Key
 		acceptor = ss.GetShadowAcceptor(args)
@@ -331,11 +329,7 @@ func main() {
 		},
 		cli.BoolFlag{
 			Name:  "proxy",
-			Usage: "enable default proxy(socks4/socks4a/socks5/http)",
-		},
-		cli.BoolFlag{
-			Name:  "ssproxy",
-			Usage: "enable shadowsocks proxy",
+			Usage: "enable default proxy(socks4/socks4a/socks5/http/shadowsocks)",
 		},
 	}
 	myApp.Action = func(c *cli.Context) error {
@@ -366,7 +360,6 @@ func main() {
 		config.UDP = c.Bool("udp")
 		config.Pprof = c.String("pprof")
 		config.DefaultProxy = c.Bool("proxy")
-		config.ShadowProxy = c.Bool("ssproxy")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -453,7 +446,6 @@ func main() {
 		log.Println("udp mode:", config.UDP)
 		log.Println("pprof listen at:", config.Pprof)
 		log.Println("default proxy:", config.DefaultProxy)
-		log.Println("shadowsocks proxy:", config.ShadowProxy)
 
 		if len(config.Pprof) != 0 {
 			if utils.PprofEnabled() {
