@@ -243,12 +243,12 @@ func main() {
 		},
 		cli.IntFlag{
 			Name:  "datashard,ds",
-			Value: 10,
+			Value: 0,
 			Usage: "set reed-solomon erasure coding - datashard",
 		},
 		cli.IntFlag{
 			Name:  "parityshard,ps",
-			Value: 3,
+			Value: 0,
 			Usage: "set reed-solomon erasure coding - parityshard",
 		},
 		cli.IntFlag{
@@ -257,8 +257,8 @@ func main() {
 			Usage: "set dscp(6bit)",
 		},
 		cli.BoolFlag{
-			Name:  "nocomp",
-			Usage: "disable compression",
+			Name:  "comp",
+			Usage: "enable compression",
 		},
 		cli.BoolFlag{
 			Name:  "usemul",
@@ -345,7 +345,7 @@ func main() {
 		config.DataShard = c.Int("datashard")
 		config.ParityShard = c.Int("parityshard")
 		config.DSCP = c.Int("dscp")
-		config.NoComp = c.Bool("nocomp")
+		config.Comp = c.Bool("comp")
 		config.AckNodelay = c.Bool("acknodelay")
 		config.NoDelay = c.Int("nodelay")
 		config.Interval = c.Int("interval")
@@ -433,7 +433,7 @@ func main() {
 		log.Println("encryption:", config.Crypt)
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
 		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-		log.Println("compression:", !config.NoComp)
+		log.Println("compression:", config.Comp)
 		log.Println("mtu:", config.MTU)
 		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
 		log.Println("acknodelay:", config.AckNodelay)
@@ -486,11 +486,13 @@ func main() {
 				conn.SetWindowSize(config.SndWnd, config.RcvWnd)
 				conn.SetACKNoDelay(config.AckNodelay)
 
-				if config.NoComp {
-					go handleMux(conn, &config)
+				var muxconn io.ReadWriteCloser
+				if config.Comp {
+					muxconn = newCompStream(conn)
 				} else {
-					go handleMux(newCompStream(conn), &config)
+					muxconn = conn
 				}
+				go handleMux(muxconn, &config)
 			} else {
 				log.Printf("%+v", err)
 			}

@@ -378,12 +378,12 @@ func main() {
 		},
 		cli.IntFlag{
 			Name:  "datashard,ds",
-			Value: 10,
+			Value: 0,
 			Usage: "set reed-solomon erasure coding - datashard",
 		},
 		cli.IntFlag{
 			Name:  "parityshard,ps",
-			Value: 3,
+			Value: 0,
 			Usage: "set reed-solomon erasure coding - parityshard",
 		},
 		cli.IntFlag{
@@ -392,8 +392,8 @@ func main() {
 			Usage: "set dscp(6bit)",
 		},
 		cli.BoolFlag{
-			Name:  "nocomp",
-			Usage: "disable compression",
+			Name:  "comp",
+			Usage: "enable compression",
 		},
 		cli.BoolFlag{
 			Name:   "acknodelay",
@@ -517,7 +517,7 @@ func main() {
 		config.DataShard = c.Int("datashard")
 		config.ParityShard = c.Int("parityshard")
 		config.DSCP = c.Int("dscp")
-		config.NoComp = c.Bool("nocomp")
+		config.Comp = c.Bool("comp")
 		config.AckNodelay = c.Bool("acknodelay")
 		config.NoDelay = c.Int("nodelay")
 		config.Interval = c.Int("interval")
@@ -632,7 +632,7 @@ func main() {
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
 		log.Println("remote address:", config.RemoteAddr)
 		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-		log.Println("compression:", !config.NoComp)
+		log.Println("compression:", config.Comp)
 		log.Println("mtu:", config.MTU)
 		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
 		log.Println("acknodelay:", config.AckNodelay)
@@ -730,11 +730,13 @@ func main() {
 
 			// stream multiplex
 			var session *smux.Session
-			if config.NoComp {
-				session, err = smux.Client(kcpconn, smuxConfig)
+			var conn io.ReadWriteCloser
+			if config.Comp {
+				conn = newCompStream(kcpconn)
 			} else {
-				session, err = smux.Client(newCompStream(kcpconn), smuxConfig)
+				conn = kcpconn
 			}
+			session, err = smux.Client(conn, smuxConfig)
 			if err != nil {
 				return nil, errors.Wrap(err, "createConn()")
 			}
