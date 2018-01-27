@@ -33,6 +33,7 @@ type Config struct {
 	UDP          bool   `json:"udp"`
 	Pprof        string `json:"pprof"`
 	DefaultProxy bool   `json:"proxy"`
+	Salt         string `json:"salt"`
 }
 
 func parseJSONConfig(config *Config, path string) error {

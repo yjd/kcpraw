@@ -331,6 +331,11 @@ func main() {
 			Name:  "proxy",
 			Usage: "enable default proxy(socks4/socks4a/socks5/http/shadowsocks)",
 		},
+		cli.StringFlag{
+			Name:  "salt",
+			Value: SALT,
+			Usage: "for pbkdf2 key derivation function",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -360,6 +365,7 @@ func main() {
 		config.UDP = c.Bool("udp")
 		config.Pprof = c.String("pprof")
 		config.DefaultProxy = c.Bool("proxy")
+		config.Salt = c.String("salt")
 
 		if c.String("c") != "" {
 			//Now only support json config file
@@ -392,7 +398,7 @@ func main() {
 		}
 
 		log.Println("version:", VERSION)
-		pass := pbkdf2.Key([]byte(config.Key), []byte(SALT), 4096, 32, sha1.New)
+		pass := pbkdf2.Key([]byte(config.Key), []byte(config.Salt), 4096, 32, sha1.New)
 		var block kcp.BlockCrypt
 		switch config.Crypt {
 		case "sm4":
@@ -438,6 +444,7 @@ func main() {
 		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
 		log.Println("acknodelay:", config.AckNodelay)
 		log.Println("dscp:", config.DSCP)
+		log.Println("salt:", config.Salt)
 		log.Println("sockbuf:", config.SockBuf)
 		log.Println("keepalive:", config.KeepAlive)
 		log.Println("snmplog:", config.SnmpLog)

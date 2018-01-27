@@ -44,6 +44,7 @@ type Config struct {
 	ChnRoute     string `json:"chnroute"`
 	UDPRelay     bool   `json:"udprelay"`
 	Proxy        bool   `json:"proxy"`
+	Salt         string `json:"salt"`
 
 	Tunnels []*tunnelConfig `json:"tunnels"`
 

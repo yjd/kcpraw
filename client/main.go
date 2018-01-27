@@ -501,6 +501,11 @@ func main() {
 			Name:  "tunnels",
 			Usage: "provide additional tcp/udp tunnels, eg: udp,:10000,8.8.8.8:53;tcp,:10080,www.google.com:80",
 		},
+		cli.StringFlag{
+			Name:  "salt",
+			Value: SALT,
+			Usage: "for pbkdf2 key derivation function",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -539,6 +544,7 @@ func main() {
 		config.ChnRoute = c.String("chnroute")
 		config.UDPRelay = c.Bool("udprelay")
 		config.Proxy = c.Bool("proxy")
+		config.Salt = c.String("salt")
 		tunnels := c.String("tunnels")
 
 		if c.String("c") != "" {
@@ -571,7 +577,7 @@ func main() {
 		listener, err := net.ListenTCP("tcp", addr)
 		checkError(err)
 
-		pass := pbkdf2.Key([]byte(config.Key), []byte(SALT), 4096, 32, sha1.New)
+		pass := pbkdf2.Key([]byte(config.Key), []byte(config.Salt), 4096, 32, sha1.New)
 		var block kcp.BlockCrypt
 		switch config.Crypt {
 		case "sm4":
@@ -637,6 +643,7 @@ func main() {
 		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
 		log.Println("acknodelay:", config.AckNodelay)
 		log.Println("dscp:", config.DSCP)
+		log.Println("salt:", config.Salt)
 		log.Println("sockbuf:", config.SockBuf)
 		log.Println("keepalive:", config.KeepAlive)
 		log.Println("conn:", config.Conn)
