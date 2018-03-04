@@ -1,10 +1,9 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/binary"
 	"encoding/csv"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"math/rand"
@@ -14,17 +13,15 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/pbkdf2"
-
 	"os/signal"
 	"syscall"
 
 	"github.com/ccsexyz/kcp-go-raw"
+	"github.com/ccsexyz/kcpraw/common"
 	"github.com/ccsexyz/shadowsocks-go/redir"
 	"github.com/ccsexyz/shadowsocks-go/shadowsocks"
 	"github.com/ccsexyz/smux"
 	"github.com/ccsexyz/utils"
-	"github.com/golang/snappy"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 	"github.com/xtaci/kcp-go"
@@ -37,154 +34,54 @@ var (
 	SALT = "kcp-go"
 )
 
-type compStream struct {
-	conn net.Conn
-	w    *snappy.Writer
-	r    *snappy.Reader
+const (
+	nonceSize  = 16
+	udpBufSize = 2048
+)
+
+type udpConn struct {
+	net.Conn
+	block kcp.BlockCrypt
+	mac   hash.Hash
+	ok    bool
 }
 
-func (c *compStream) Read(p []byte) (n int, err error) {
-	return c.r.Read(p)
-}
-
-func (c *compStream) Write(p []byte) (n int, err error) {
-	n, err = c.w.Write(p)
-	err = c.w.Flush()
-	return n, err
-}
-
-func (c *compStream) Close() error {
-	return c.conn.Close()
-}
-
-func newCompStream(conn net.Conn) *compStream {
-	c := new(compStream)
-	c.conn = conn
-	c.w = snappy.NewBufferedWriter(conn)
-	c.r = snappy.NewReader(conn)
-	return c
-}
-
-var udpBufPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 2048)
-	},
-}
-
-func handleTunnelUDPClient(sess *smux.Session, p1 net.Conn, target string) {
-	defer p1.Close()
-
-	if len(target) > 256 {
-		return
-	}
-
-	p2, err := sess.OpenStream()
+func (conn *udpConn) Read(b []byte) (n int, err error) {
+AGAIN:
+	n, err = conn.Conn.Read(b)
 	if err != nil {
 		return
 	}
-	defer p2.Close()
-
-	err = socks6HandShake(p2, "udprelay", 6666)
-	if err != nil {
-		return
+	if n < nonceSize {
+		goto AGAIN
 	}
-
-	buf := udpBufPool.Get().([]byte)
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(target)))
-	copy(buf[2:], target)
-
-	_, err = p2.Write(buf[:len(target)+2])
-	udpBufPool.Put(buf)
-	buf = nil
-	if err != nil {
-		return
-	}
-
-	log.Println("udp tunnel opened", target)
-	defer log.Println("udp tunnel closed", target)
-
-	tosec := 60
-	if strings.HasSuffix(target, ":53") {
-		tosec = 5
-	}
-
-	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*time.Duration(tosec), nil)
+	conn.block.Decrypt(b[:n], b[:n])
+	n = copy(b, b[nonceSize:n])
+	conn.ok = true
+	return
 }
 
-func handleUDPClient(sess *smux.Session, p1 net.Conn) {
-	defer p1.Close()
-
-	buf := udpBufPool.Get().([]byte)
-	defer func() {
-		if buf != nil {
-			udpBufPool.Put(buf)
-		}
-	}()
-
-	n, err := p1.Read(buf)
+func (conn *udpConn) Write(b []byte) (n int, err error) {
+	macSize := conn.mac.Size()
+	buf := utils.GetBuf(len(b) + nonceSize + macSize)
+	defer utils.PutBuf(buf)
+	utils.PutRandomBytes(buf[:nonceSize])
+	copy(buf[nonceSize:], b)
+	conn.block.Encrypt(buf[:nonceSize+len(b)], buf[:nonceSize+len(b)])
+	if conn.ok {
+		utils.PutRandomBytes(buf[nonceSize+len(b):])
+	} else {
+		conn.mac.Write(buf[:nonceSize+len(b)])
+		mac := conn.mac.Sum(nil)
+		conn.mac.Reset()
+		copy(buf[nonceSize+len(b):], mac)
+	}
+	_, err = conn.Conn.Write(buf[:nonceSize+macSize+len(b)])
 	if err != nil {
 		return
 	}
-
-	if n < 3 {
-		return
-	}
-
-	addr, data, err := ss.ParseAddr(buf[3:n])
-	if err != nil || addr == nil {
-		return
-	}
-
-	header := make([]byte, n-len(data))
-	copy(header, buf)
-
-	p2, err := sess.OpenStream()
-	if err != nil {
-		return
-	}
-	defer p2.Close()
-
-	err = socks6HandShake(p2, "udprelay", 6666)
-	if err != nil {
-		return
-	}
-
-	wbuf := udpBufPool.Get().([]byte)
-	defer func() {
-		if wbuf != nil {
-			udpBufPool.Put(wbuf)
-		}
-	}()
-
-	target := addr.String()
-	binary.BigEndian.PutUint16(wbuf, uint16(len(target)))
-	off := 2
-	off += copy(wbuf[off:], target)
-	if len(data) > 0 {
-		binary.BigEndian.PutUint16(wbuf[off:], uint16(len(data)))
-		off += 2
-		off += copy(wbuf[off:], data)
-	}
-
-	_, err = p2.Write(wbuf[:off])
-	if err != nil {
-		return
-	}
-
-	log.Println("udp opened", target)
-	defer log.Println("udp closed", target)
-
-	udpBufPool.Put(buf)
-	udpBufPool.Put(wbuf)
-	buf = nil
-	wbuf = nil
-
-	tosec := 60
-	if strings.HasSuffix(target, ":53") {
-		tosec = 5
-	}
-
-	utils.PipeUDPOverTCP(p1, p2, &udpBufPool, time.Second*time.Duration(tosec), header)
+	n = len(b)
+	return
 }
 
 func handleTunnelClient(sess *smux.Session, p1 net.Conn, host string, port int) {
@@ -296,18 +193,11 @@ func handleClient(sess *smux.Session, p1 net.Conn) {
 }
 
 func pipe(p1, p2 net.Conn) {
-	// start tunnel
-	p1die := make(chan struct{})
-	go func() { io.Copy(p1, p2); close(p1die) }()
-
-	p2die := make(chan struct{})
-	go func() { io.Copy(p2, p1); close(p2die) }()
-
-	// wait for tunnel termination
-	select {
-	case <-p1die:
-	case <-p2die:
-	}
+	b1 := utils.GetBuf(65535)
+	defer utils.PutBuf(b1)
+	b2 := utils.GetBuf(65535)
+	defer utils.PutBuf(b2)
+	common.Pipe(p1, p2, b1, b2)
 }
 
 func checkError(err error) {
@@ -387,13 +277,19 @@ func main() {
 			Usage: "set reed-solomon erasure coding - parityshard",
 		},
 		cli.IntFlag{
+			Name:  "udp_datashard,udp_ds",
+			Value: 0,
+			Usage: "set reed-solomon erasure coding - datashard",
+		},
+		cli.IntFlag{
+			Name:  "udp_parityshard,udp_ps",
+			Value: 0,
+			Usage: "set reed-solomon erasure coding - parityshard",
+		},
+		cli.IntFlag{
 			Name:  "dscp",
 			Value: 0,
 			Usage: "set dscp(6bit)",
-		},
-		cli.BoolFlag{
-			Name:  "comp",
-			Usage: "enable compression",
 		},
 		cli.BoolFlag{
 			Name:   "acknodelay",
@@ -506,6 +402,20 @@ func main() {
 			Value: SALT,
 			Usage: "for pbkdf2 key derivation function",
 		},
+		cli.BoolFlag{
+			Name:  "udpviakcp",
+			Usage: "",
+		},
+		cli.IntFlag{
+			Name:  "timeout",
+			Value: 60,
+			Usage: "",
+		},
+		cli.IntFlag{
+			Name:  "udp_timeout",
+			Value: 5,
+			Usage: "",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -522,7 +432,6 @@ func main() {
 		config.DataShard = c.Int("datashard")
 		config.ParityShard = c.Int("parityshard")
 		config.DSCP = c.Int("dscp")
-		config.Comp = c.Bool("comp")
 		config.AckNodelay = c.Bool("acknodelay")
 		config.NoDelay = c.Int("nodelay")
 		config.Interval = c.Int("interval")
@@ -545,11 +454,26 @@ func main() {
 		config.UDPRelay = c.Bool("udprelay")
 		config.Proxy = c.Bool("proxy")
 		config.Salt = c.String("salt")
+		config.UDPViaKCP = c.Bool("udpviakcp")
+		config.Timeout = c.Int("timeout")
+		config.UDPTimeout = c.Int("udp_timeout")
+		config.UDPDataShard = c.Int("udp_datashard")
+		config.UDPParityShard = c.Int("udp_parityshard")
 		tunnels := c.String("tunnels")
 
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
 			checkError(err)
+		}
+
+		if config.UDPTimeout == 0 {
+			config.UDPTimeout = config.Timeout
+		}
+		if config.UDPDataShard == 0 {
+			config.UDPDataShard = config.DataShard
+		}
+		if config.UDPParityShard == 0 {
+			config.UDPParityShard = config.ParityShard
 		}
 
 		// log redirect
@@ -577,39 +501,7 @@ func main() {
 		listener, err := net.ListenTCP("tcp", addr)
 		checkError(err)
 
-		pass := pbkdf2.Key([]byte(config.Key), []byte(config.Salt), 4096, 32, sha1.New)
-		var block kcp.BlockCrypt
-		switch config.Crypt {
-		case "sm4":
-			block, _ = kcp.NewSM4BlockCrypt(pass[:16])
-		case "tea":
-			block, _ = kcp.NewTEABlockCrypt(pass[:16])
-		case "xor":
-			block, _ = kcp.NewSimpleXORBlockCrypt(pass)
-		case "none":
-			block, _ = kcp.NewNoneBlockCrypt(pass)
-		case "aes-128":
-			block, _ = kcp.NewAESBlockCrypt(pass[:16])
-		case "aes-192":
-			block, _ = kcp.NewAESBlockCrypt(pass[:24])
-		case "blowfish":
-			block, _ = kcp.NewBlowfishBlockCrypt(pass)
-		case "twofish":
-			block, _ = kcp.NewTwofishBlockCrypt(pass)
-		case "cast5":
-			block, _ = kcp.NewCast5BlockCrypt(pass[:16])
-		case "3des":
-			block, _ = kcp.NewTripleDESBlockCrypt(pass[:24])
-		case "xtea":
-			block, _ = kcp.NewXTEABlockCrypt(pass[:16])
-		case "salsa20":
-			block, _ = kcp.NewSalsa20BlockCrypt(pass)
-		case "chacha20":
-			block, _ = utils.NewChaCha20BlockCrypt(pass)
-		default:
-			config.Crypt = "aes"
-			block, _ = kcp.NewAESBlockCrypt(pass)
-		}
+		block := common.NewBlockCrypt([]byte(config.Key), []byte(config.Salt), config.Crypt)
 
 		if len(config.Host) == 0 {
 			config.Obfs = ""
@@ -629,7 +521,11 @@ func main() {
 			}
 		}
 
-		if len(config.ProxyList) != 0 || len(config.ChnRoute) != 0 || config.UDPRelay {
+		if len(config.ProxyList) != 0 || len(config.ChnRoute) != 0 {
+			config.Proxy = true
+		}
+
+		if config.UDPViaKCP && config.UDPRelay && !config.Proxy {
 			config.Proxy = true
 		}
 
@@ -638,7 +534,6 @@ func main() {
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
 		log.Println("remote address:", config.RemoteAddr)
 		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-		log.Println("compression:", config.Comp)
 		log.Println("mtu:", config.MTU)
 		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
 		log.Println("acknodelay:", config.AckNodelay)
@@ -738,11 +633,7 @@ func main() {
 			// stream multiplex
 			var session *smux.Session
 			var conn io.ReadWriteCloser
-			if config.Comp {
-				conn = newCompStream(kcpconn)
-			} else {
-				conn = kcpconn
-			}
+			conn = kcpconn
 			session, err = smux.Client(conn, smuxConfig)
 			if err != nil {
 				return nil, errors.Wrap(err, "createConn()")
@@ -824,8 +715,90 @@ func main() {
 			return dialSessionForUDPImp()
 		}
 
+		createConnForUDP := func() (conn net.Conn, err error) {
+			if config.UDPViaKCP {
+				session := dialSessionForUDP()
+				if session == nil {
+					return nil, fmt.Errorf("no available session")
+				}
+				conn, err = session.OpenStream()
+				if err != nil {
+					return
+				}
+				err = socks6HandShake(conn, "udprelay", 6666)
+				if err != nil {
+					return
+				}
+				conn = common.NewPktConn(conn)
+			} else {
+				conn, err = kcpraw.DialRAW(config.RemoteAddr, config.Key, config.MulConn, config.UDP, nil)
+				if err != nil {
+					return nil, err
+				}
+				mac := common.NewHMAC([]byte(config.Key), []byte(config.Salt))
+				conn = &udpConn{Conn: conn, block: block, mac: mac}
+				conn = utils.NewSliceConn(conn, config.MTU)
+				if config.UDPDataShard > 0 && config.UDPParityShard > 0 {
+					conn = utils.NewFecConn(conn, config.UDPDataShard, config.UDPParityShard)
+				}
+			}
+			return conn, nil
+		}
+
+		handleUDPTunnel := func(p1 net.Conn, target string, data []byte) {
+			p2, err := createConnForUDP()
+			if err != nil {
+				return
+			}
+			defer p2.Close()
+
+			if config.UDPViaKCP {
+				_, err = p2.Write(utils.StringToSlice(target))
+				if err != nil {
+					return
+				}
+			} else {
+				p2 = common.NewAddrConn(p2, utils.StringToSlice(target), true)
+			}
+
+			if data != nil {
+				_, err = p2.Write(data)
+				if err != nil {
+					return
+				}
+			}
+
+			log.Println("udp tunnel opened", target)
+			defer log.Println("udp tunnel closed", target)
+
+			pipe(p1, p2)
+		}
+
+		handleUDPClient := func(p1 net.Conn) {
+			defer p1.Close()
+
+			buf := utils.GetBuf(udpBufSize)
+			defer utils.PutBuf(buf)
+
+			n, err := p1.Read(buf)
+			if err != nil || n < 3 {
+				return
+			}
+
+			addr, data, err := ss.ParseAddr(buf[3:n])
+			if err != nil || addr == nil {
+				return
+			}
+
+			header := utils.CopyBuffer(buf[:n-len(data)])
+			p1 = common.NewHdrConn(p1, header)
+
+			handleUDPTunnel(p1, addr.String(), data)
+		}
+
 		if config.UDPRelay {
-			udpListener, err := utils.ListenSubUDP("udp", config.LocalAddr)
+			ctx := utils.UDPServerCtx{Expires: config.UDPTimeout, Mtu: config.MTU * 2}
+			udpListener, err := utils.ListenSubUDPWithCtx("udp", config.LocalAddr, &ctx)
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -836,21 +809,33 @@ func main() {
 					if err != nil {
 						log.Fatalln(err)
 					}
-					session := dialSessionForUDP()
-					if session == nil {
-						p1.Close()
-						continue
-					}
-					go handleUDPClient(session, p1)
+					p1 = common.NewTimeoutConn(p1, time.Second*time.Duration(config.UDPTimeout))
+					go func(p1 net.Conn) {
+						defer p1.Close()
+						if config.Proxy {
+							handleUDPClient(p1)
+						} else {
+							p2, err := createConnForUDP()
+							if err != nil {
+								return
+							}
+							defer p2.Close()
+							log.Println("udp tunnel opened")
+							defer log.Println("udp tunnel closed")
+							pipe(p1, p2)
+						}
+					}(p1)
 				}
 			}()
 		}
+
 		runUDPTunnelListener := func(ctx *tunnelConfig) {
-			if len(ctx.LocalAddr) == 0 || len(ctx.RemoteAddr) == 0 || len(ctx.RemoteAddr) > 256 {
+			if len(ctx.LocalAddr) == 0 || len(ctx.RemoteAddr) == 0 || len(ctx.RemoteAddr) > 256 || config.Proxy == false {
 				return
 			}
 			log.Println("run udp tunnel:", ctx.LocalAddr, "->", ctx.RemoteAddr)
-			udpListener, err := utils.ListenSubUDP("udp", ctx.LocalAddr)
+			udpCtx := utils.UDPServerCtx{Expires: config.UDPTimeout, Mtu: config.MTU * 2}
+			udpListener, err := utils.ListenSubUDPWithCtx("udp", ctx.LocalAddr, &udpCtx)
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -860,14 +845,11 @@ func main() {
 				if err != nil {
 					log.Fatalln(err)
 				}
-				session := dialSessionForUDP()
-				if session == nil {
-					p1.Close()
-					continue
-				}
-				go handleTunnelUDPClient(session, p1, ctx.RemoteAddr)
+				p1 = common.NewTimeoutConn(p1, time.Second*time.Duration(config.UDPTimeout))
+				go handleUDPTunnel(p1, ctx.RemoteAddr, nil)
 			}
 		}
+
 		runTCPTunnelListener := func(ctx *tunnelConfig) {
 			if config.proxyAcceptor == nil {
 				return
@@ -889,6 +871,7 @@ func main() {
 				if err != nil {
 					log.Fatalln(err)
 				}
+				p1 = common.NewTimeoutConn(p1, time.Second*time.Duration(config.Timeout))
 				go func(conn net.Conn) {
 					session := dialSessionForTCP()
 					if session == nil {
@@ -899,6 +882,7 @@ func main() {
 				}(p1)
 			}
 		}
+
 		for _, tunnel := range config.Tunnels {
 			if tunnel.Type == "udp" {
 				if config.UDPRelay != true {
@@ -916,9 +900,11 @@ func main() {
 			}
 			checkError(err)
 			go func(conn net.Conn) {
+				defer conn.Close()
+				conn = common.NewTimeoutConn(conn, time.Second*time.Duration(config.Timeout))
+
 				session := dialSessionForTCP()
 				if session == nil {
-					conn.Close()
 					return
 				}
 
@@ -931,7 +917,6 @@ func main() {
 				if len(target) > 0 {
 					host, port, err := utils.SplitHostAndPort(target)
 					if err != nil {
-						conn.Close()
 						return
 					}
 					handleTunnelClient(session, conn, host, port)

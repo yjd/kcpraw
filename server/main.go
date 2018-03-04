@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/binary"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -10,20 +8,16 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"strings"
-	"sync"
 	"time"
-
-	"golang.org/x/crypto/pbkdf2"
 
 	"os/signal"
 	"syscall"
 
 	kcpraw "github.com/ccsexyz/kcp-go-raw"
+	"github.com/ccsexyz/kcpraw/common"
 	ss "github.com/ccsexyz/shadowsocks-go/shadowsocks"
 	"github.com/ccsexyz/smux"
 	"github.com/ccsexyz/utils"
-	"github.com/golang/snappy"
 	"github.com/urfave/cli"
 	kcp "github.com/xtaci/kcp-go"
 )
@@ -35,33 +29,9 @@ var (
 	SALT = "kcp-go"
 )
 
-type compStream struct {
-	conn net.Conn
-	w    *snappy.Writer
-	r    *snappy.Reader
-}
-
-func (c *compStream) Read(p []byte) (n int, err error) {
-	return c.r.Read(p)
-}
-
-func (c *compStream) Write(p []byte) (n int, err error) {
-	n, err = c.w.Write(p)
-	err = c.w.Flush()
-	return n, err
-}
-
-func (c *compStream) Close() error {
-	return c.conn.Close()
-}
-
-func newCompStream(conn net.Conn) *compStream {
-	c := new(compStream)
-	c.conn = conn
-	c.w = snappy.NewBufferedWriter(conn)
-	c.r = snappy.NewReader(conn)
-	return c
-}
+const (
+	udpBufSize = 2048
+)
 
 // handle multiplex-ed connection
 func handleMux(conn io.ReadWriteCloser, config *Config) {
@@ -103,7 +73,7 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 				target = ssconn.GetDst().String()
 			}
 			if target == "udprelay:6666" {
-				go handleUDPClient(conn1)
+				go handleUDPClient(conn1, config)
 				return
 			}
 			conn2, err := net.DialTimeout("tcp", target, 5*time.Second)
@@ -121,31 +91,19 @@ func handleMux(conn io.ReadWriteCloser, config *Config) {
 	}
 }
 
-var udpBufPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 2048)
-	},
-}
-
-func handleUDPClient(p1 net.Conn) {
+func handleUDPClient(p1 net.Conn, c *Config) {
+	p1 = common.NewPktConn(p1)
 	defer p1.Close()
 
-	buf := udpBufPool.Get().([]byte)
-	defer udpBufPool.Put(buf)
+	buf := utils.GetBuf(udpBufSize)
+	defer utils.PutBuf(buf)
 
-	_, err := io.ReadFull(p1, buf[:2])
-	if err != nil {
+	n, err := p1.Read(buf)
+	if err != nil || n == 0 {
 		return
 	}
-	sz := int(binary.BigEndian.Uint16(buf[:2]))
-	if sz > len(buf) {
-		return
-	}
-	_, err = io.ReadFull(p1, buf[:sz])
-	if err != nil {
-		return
-	}
-	target := string(buf[:sz])
+
+	target := string(buf[:n])
 
 	p2, err := net.Dial("udp", target)
 	if err != nil {
@@ -157,12 +115,38 @@ func handleUDPClient(p1 net.Conn) {
 	log.Println("udp opened", "("+target+")")
 	defer log.Println("udp closed", "("+target+")")
 
-	tosec := 60
-	if strings.HasSuffix(target, ":53") {
-		tosec = 5
+	rbuf := utils.GetBuf(udpBufSize)
+	defer utils.PutBuf(rbuf)
+
+	p1die := make(chan struct{})
+	p2die := make(chan struct{})
+
+	if c.UDPTimeout > 0 {
+		p1 = common.NewTimeoutConn(p1, time.Second*time.Duration(c.UDPTimeout))
+		p2 = common.NewTimeoutConn(p2, time.Second*time.Duration(c.UDPTimeout))
 	}
 
-	utils.PipeUDPOverTCP(p2, p1, &udpBufPool, time.Second*time.Duration(tosec), nil)
+	copy := func(p1, p2 net.Conn, buf []byte, die chan struct{}) {
+		defer close(die)
+		for {
+			n, err := p1.Read(buf)
+			if err != nil {
+				return
+			}
+			_, err = p2.Write(buf[:n])
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	go copy(p1, p2, buf, p1die)
+	go copy(p2, p1, rbuf, p2die)
+
+	select {
+	case <-p1die:
+	case <-p2die:
+	}
 }
 
 func handleClient(p1, p2 io.ReadWriteCloser, suffix string) {
@@ -252,13 +236,19 @@ func main() {
 			Usage: "set reed-solomon erasure coding - parityshard",
 		},
 		cli.IntFlag{
+			Name:  "udp_datashard,udp_ds",
+			Value: 0,
+			Usage: "set reed-solomon erasure coding - datashard",
+		},
+		cli.IntFlag{
+			Name:  "udp_parityshard,udp_ps",
+			Value: 0,
+			Usage: "set reed-solomon erasure coding - parityshard",
+		},
+		cli.IntFlag{
 			Name:  "dscp",
 			Value: 0,
 			Usage: "set dscp(6bit)",
-		},
-		cli.BoolFlag{
-			Name:  "comp",
-			Usage: "enable compression",
 		},
 		cli.BoolFlag{
 			Name:  "usemul",
@@ -336,6 +326,16 @@ func main() {
 			Value: SALT,
 			Usage: "for pbkdf2 key derivation function",
 		},
+		cli.IntFlag{
+			Name:  "timeout",
+			Value: 60,
+			Usage: "",
+		},
+		cli.IntFlag{
+			Name:  "udp_timeout",
+			Value: 5,
+			Usage: "",
+		},
 	}
 	myApp.Action = func(c *cli.Context) error {
 		config := Config{}
@@ -350,7 +350,6 @@ func main() {
 		config.DataShard = c.Int("datashard")
 		config.ParityShard = c.Int("parityshard")
 		config.DSCP = c.Int("dscp")
-		config.Comp = c.Bool("comp")
 		config.AckNodelay = c.Bool("acknodelay")
 		config.NoDelay = c.Int("nodelay")
 		config.Interval = c.Int("interval")
@@ -366,11 +365,25 @@ func main() {
 		config.Pprof = c.String("pprof")
 		config.DefaultProxy = c.Bool("proxy")
 		config.Salt = c.String("salt")
+		config.Timeout = c.Int("timeout")
+		config.UDPTimeout = c.Int("udp_timeout")
+		config.UDPDataShard = c.Int("udp_datashard")
+		config.UDPParityShard = c.Int("udp_parityshard")
 
 		if c.String("c") != "" {
 			//Now only support json config file
 			err := parseJSONConfig(&config, c.String("c"))
 			checkError(err)
+		}
+
+		if config.UDPTimeout == 0 {
+			config.UDPTimeout = config.Timeout
+		}
+		if config.UDPDataShard == 0 {
+			config.UDPDataShard = config.DataShard
+		}
+		if config.UDPParityShard == 0 {
+			config.UDPParityShard = config.ParityShard
 		}
 
 		// log redirect
@@ -398,48 +411,22 @@ func main() {
 		}
 
 		log.Println("version:", VERSION)
-		pass := pbkdf2.Key([]byte(config.Key), []byte(config.Salt), 4096, 32, sha1.New)
-		var block kcp.BlockCrypt
-		switch config.Crypt {
-		case "sm4":
-			block, _ = kcp.NewSM4BlockCrypt(pass[:16])
-		case "tea":
-			block, _ = kcp.NewTEABlockCrypt(pass[:16])
-		case "xor":
-			block, _ = kcp.NewSimpleXORBlockCrypt(pass)
-		case "none":
-			block, _ = kcp.NewNoneBlockCrypt(pass)
-		case "aes-128":
-			block, _ = kcp.NewAESBlockCrypt(pass[:16])
-		case "aes-192":
-			block, _ = kcp.NewAESBlockCrypt(pass[:24])
-		case "blowfish":
-			block, _ = kcp.NewBlowfishBlockCrypt(pass)
-		case "twofish":
-			block, _ = kcp.NewTwofishBlockCrypt(pass)
-		case "cast5":
-			block, _ = kcp.NewCast5BlockCrypt(pass[:16])
-		case "3des":
-			block, _ = kcp.NewTripleDESBlockCrypt(pass[:24])
-		case "xtea":
-			block, _ = kcp.NewXTEABlockCrypt(pass[:16])
-		case "salsa20":
-			block, _ = kcp.NewSalsa20BlockCrypt(pass)
-		case "chacha20":
-			block, _ = utils.NewChaCha20BlockCrypt(pass)
-		default:
-			config.Crypt = "aes"
-			block, _ = kcp.NewAESBlockCrypt(pass)
-		}
+		block := common.NewBlockCrypt([]byte(config.Key), []byte(config.Salt), config.Crypt)
 
-		lis, err := kcpraw.ListenWithOptions(config.Listen, block, config.DataShard, config.ParityShard, config.Key, config.UseMul, config.UDP)
+		lisconn, err := kcpraw.ListenRAW(config.Listen, config.Key, config.UseMul, config.UDP, nil)
 		checkError(err)
+
+		mac := common.NewHMAC([]byte(config.Key), []byte(config.Salt))
+		divconn := newDivConn(lisconn, block, mac, config.MTU)
+
+		lis, err := kcp.ServeConn(block, config.DataShard, config.ParityShard, divconn)
+		checkError(err)
+
 		log.Println("listening on:", lis.Addr())
 		log.Println("target:", config.Target)
 		log.Println("encryption:", config.Crypt)
 		log.Println("nodelay parameters:", config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
 		log.Println("sndwnd:", config.SndWnd, "rcvwnd:", config.RcvWnd)
-		log.Println("compression:", config.Comp)
 		log.Println("mtu:", config.MTU)
 		log.Println("datashard:", config.DataShard, "parityshard:", config.ParityShard)
 		log.Println("acknodelay:", config.AckNodelay)
@@ -473,6 +460,66 @@ func main() {
 			os.Exit(1)
 		}()
 
+		if true {
+			bpconn := divconn.bypass()
+
+			var create func(*utils.SubConn) (net.Conn, net.Conn, error)
+			if config.DefaultProxy {
+				create = func(sconn *utils.SubConn) (conn net.Conn, rconn net.Conn, err error) {
+					conn = utils.NewSliceConn(sconn, config.MTU)
+					if config.UDPDataShard > 0 && config.UDPParityShard > 0 {
+						conn = utils.NewFecConn(conn, config.UDPDataShard, config.UDPParityShard)
+					}
+					buf := utils.GetBuf(config.MTU)
+					defer utils.PutBuf(buf)
+					n, err := conn.Read(buf)
+					if err != nil {
+						return
+					}
+					length := int(buf[0])
+					if n < 1+length {
+						err = fmt.Errorf("invalid length")
+						return
+					}
+					target := string(buf[1 : 1+length])
+					data := buf[1+length : n]
+					rconn, err = net.Dial("udp", target)
+					if err != nil {
+						return
+					}
+					_, err = rconn.Write(data)
+					if err != nil {
+						return
+					}
+					conn = common.NewAddrConn(conn, nil, false)
+					return
+				}
+			} else {
+				create = func(sconn *utils.SubConn) (conn net.Conn, rconn net.Conn, err error) {
+					conn = utils.NewSliceConn(sconn, config.MTU)
+					if config.UDPDataShard > 0 && config.UDPParityShard > 0 {
+						conn = utils.NewFecConn(conn, config.UDPDataShard, config.UDPParityShard)
+					}
+					buf := utils.GetBuf(config.MTU)
+					defer utils.PutBuf(buf)
+					n, err := conn.Read(buf)
+					if err != nil {
+						return
+					}
+					log.Println(buf[:n])
+					rconn, err = net.Dial("udp", config.Target)
+					if err != nil {
+						return
+					}
+					_, err = rconn.Write(buf[:n])
+					return
+				}
+			}
+
+			ctx := &utils.UDPServerCtx{Expires: config.UDPTimeout, Mtu: config.MTU * 2}
+			go ctx.RunUDPServer(bpconn, create)
+		}
+
 		go snmpLogger(config.SnmpLog, config.SnmpPeriod)
 		for {
 			if conn, err := lis.AcceptKCP(); err == nil {
@@ -493,13 +540,7 @@ func main() {
 				conn.SetWindowSize(config.SndWnd, config.RcvWnd)
 				conn.SetACKNoDelay(config.AckNodelay)
 
-				var muxconn io.ReadWriteCloser
-				if config.Comp {
-					muxconn = newCompStream(conn)
-				} else {
-					muxconn = conn
-				}
-				go handleMux(muxconn, &config)
+				go handleMux(conn, &config)
 			} else {
 				log.Printf("%+v", err)
 			}
