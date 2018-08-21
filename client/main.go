@@ -461,6 +461,8 @@ func main() {
 		config.UDPParityShard = c.Int("udp_parityshard")
 		tunnels := c.String("tunnels")
 
+		parseConfigFromEnv(&config)
+
 		if c.String("c") != "" {
 			err := parseJSONConfig(&config, c.String("c"))
 			checkError(err)
